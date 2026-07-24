@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output (electron-builder)
+dist/
+build/
+out/
+
+# Environment / secrets
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Local tool config (machine-specific, not part of the project)
+.claude/

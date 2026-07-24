@@ -1,0 +1,48 @@
+{
+  "name": "sumo-simulation-dashboard",
+  "version": "1.0.31",
+  "description": "Desktop dashboard for building SUMO traffic simulation demand files and analyzing simulation output.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "test": "node --test tests/*.test.js"
+  },
+  "author": "W.P.K. Warnasuriya, T.M. Rengarasu, R. Saahith Ahamed",
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.sumo.simulationdashboard",
+    "productName": "SUMO Simulation Dashboard",
+    "icon": "Icon.png",
+    "files": [
+      "index.html",
+      "app.js",
+      "data.js",
+      "detector.js",
+      "xmlBuilder.js",
+      "emissionsParser.js",
+      "emissionsWorker.js",
+      "graphDistance.js",
+      "intervalAggregation.js",
+      "gehMape.js",
+      "styles.css",
+      "main.js",
+      "preload.js",
+      "Icon.png",
+      "vendor/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "Icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

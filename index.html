@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUMO Simulation Analysis Dashboard</title>
+    <meta name="description" content="Browser-based analysis dashboard for SUMO traffic simulation output">
+    <link rel="stylesheet" href="styles.css?v=8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="vendor/chart.umd.min.js"></script>
+    <script src="vendor/jspdf.umd.min.js"></script>
+    <script src="vendor/html2canvas.min.js"></script>
+    <style>
+        body.dark-mode {
+            --bg-color: #121212;
+            --bg-surface: #1e1e1e;
+            --bg-surface-hover: #2d2d2d;
+            --text-primary: #e0e0e0;
+            --text-secondary: #aaaaaa;
+            --text-muted: #888888;
+            --border-subtle: #333333;
+            --border-strong: #444444;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+        }
+        body.dark-mode .app-container {
+            background-color: var(--bg-color);
+        }
+        body.dark-mode .card,
+        body.dark-mode .app-header {
+            background-color: var(--bg-surface);
+            border-color: var(--border-subtle);
+        }
+        body.dark-mode .data-table th,
+        body.dark-mode .data-table td {
+            border-color: var(--border-subtle);
+        }
+        body.dark-mode .data-table th {
+            background-color: var(--bg-surface-hover);
+            color: var(--text-primary);
+        }
+        body.dark-mode input,
+        body.dark-mode select,
+        body.dark-mode textarea {
+            background-color: var(--bg-surface-hover);
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+        }
+        body.dark-mode .tab-btn {
+            color: var(--text-secondary);
+        }
+        body.dark-mode .tab-btn.active {
+            color: var(--text-primary);
+        }
+        body.dark-mode .tab-nav {
+            background-color: var(--bg-surface);
+            border-color: var(--border-subtle);
+        }
+        body.dark-mode .tab-btn:hover {
+            background-color: var(--bg-surface-hover);
+        }
+        body.dark-mode .stat-box {
+            background-color: var(--bg-surface);
+            border-color: var(--border-subtle);
+        }
+        body.dark-mode .detector-card {
+            background-color: var(--bg-surface);
+            border-color: var(--border-subtle);
+        }
+    </style>
+
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            var errDiv = document.createElement('div');
+            errDiv.style.position = 'fixed';
+            errDiv.style.top = '10px';
+            errDiv.style.left = '10px';
+            errDiv.style.right = '10px';
+            errDiv.style.padding = '20px';
+            errDiv.style.backgroundColor = 'red';
+            errDiv.style.color = 'white';
+            errDiv.style.zIndex = '999999';
+            errDiv.style.fontWeight = 'bold';
+            errDiv.innerHTML = "GLOBAL JS ERROR:<br>" + msg + "<br>Line: " + line + "<br>Col: " + col + "<br>" + (error ? error.stack : '');
+            document.body.appendChild(errDiv);
+            return false;
+        };
+        window.addEventListener("unhandledrejection", function (event) {
+            var errDiv = document.createElement('div');
+            errDiv.style.position = 'fixed';
+            errDiv.style.bottom = '10px';
+            errDiv.style.left = '10px';
+            errDiv.style.right = '10px';
+            errDiv.style.padding = '20px';
+            errDiv.style.backgroundColor = 'darkred';
+            errDiv.style.color = 'white';
+            errDiv.style.zIndex = '999999';
+            errDiv.style.fontWeight = 'bold';
+            errDiv.innerHTML = "UNHANDLED PROMISE REJECTION:<br>" + event.reason;
+            document.body.appendChild(errDiv);
+        });
+    </script>
+</head>
+<body class="splash-active">
+    <div id="splash-screen" class="splash-screen">
+        <div class="splash-bg-anim"></div>
+        <div class="splash-content">
+            <img src="Icon.png" alt="" class="splash-icon">
+            <h1 class="splash-title">Welcome to <span class="splash-title-accent">SUMO Simulation Dashboard</span></h1>
+            <p class="splash-subtitle">Traffic simulation demand-building &amp; analysis, in one place.</p>
+            <button type="button" class="splash-continue-btn">Continue →</button>
+            <p class="splash-credit">Built by the Traffic Data Collection Team</p>
+        </div>
+    </div>
+    <script>
+        (function() {
+            var splash = document.getElementById('splash-screen');
+            if (!splash) return;
+            var dismissed = false;
+            function dismissSplash() {
+                if (dismissed) return;
+                dismissed = true;
+                splash.classList.add('splash-hidden');
+                document.body.classList.remove('splash-active');
+                window.removeEventListener('keydown', onKey);
+                setTimeout(function() {
+                    if (splash.parentNode) splash.parentNode.removeChild(splash);
+                }, 650);
+            }
+            function onKey() { dismissSplash(); }
+            splash.addEventListener('click', dismissSplash);
+            window.addEventListener('keydown', onKey);
+        })();
+    </script>
+    <div class="app-container">
+        <header class="app-header" style="position:relative;">
+            <div style="position:absolute; top:1rem; right:1.5rem; display:flex; gap:0.6rem; flex-wrap:wrap; justify-content:flex-end; max-width:calc(100% - 2rem); z-index:10;">
+                <button class="btn btn-secondary" id="btn-save-changes" onclick="App.saveChangesToProject()" title="Write current Flows/Pedestrians/Bus/Parking data into the project folder"
+                    style="font-weight:600; white-space:nowrap;">
+                    Save Changes
+                </button>
+                <button class="btn btn-primary" id="btn-run-sumo" onclick="App.runSumo()" title="Run this project in SUMO (opens the SUMO GUI)"
+                    style="background-color:#16a34a; border-color:#16a34a; font-weight:600; white-space:nowrap;">
+                    Run SUMO
+                </button>
+                <button class="btn btn-primary" id="btn-run-analyze" onclick="App.runSumoAndAnalyze()" title="Run SUMO in the background (no window), then show vehicle speeds and other results automatically"
+                    style="background-color:#7c3aed; border-color:#7c3aed; font-weight:600; white-space:nowrap;">
+                    Run & Analyze
+                </button>
+            </div>
+            <div class="header-content">
+                <h1 class="app-title">SUMO Simulation Analysis Dashboard</h1>
+                <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; margin-top:0.5rem;">
+                    <button class="btn btn-primary" id="btn-load-project" onclick="App.loadSumoProject()" style="font-size:0.95rem; padding:0.5rem 1.1rem;">
+                        Load SUMO Project Folder
+                    </button>
+                    <input type="file" id="file-project-fallback" multiple webkitdirectory style="display:none" onchange="App.handleFolderFallback(event)">
+                    <span id="project-name-display" style="font-weight:600; color:var(--accent-primary,#2563eb); font-size:0.9rem;"></span>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:center; margin-top:0.75rem; background:var(--bg-surface-hover,#f4f4f4); padding:0.6rem 1rem; border-radius:6px; border:1px solid var(--border-subtle,#ccc);">
+                    <label style="font-weight:500; font-size:0.85rem;">Sim Start:
+                        <input type="text" id="sim-start-time" value="06:30" class="form-control" style="width:80px; padding:0.25rem 0.4rem; margin-left:0.3rem; font-size:0.85rem;" oninput="App.onSimTimeChange()">
+                    </label>
+                    <label style="font-weight:500; font-size:0.85rem;">Duration (min):
+                        <input type="number" id="sim-duration" value="100" min="1" class="form-control" style="width:70px; padding:0.25rem 0.4rem; margin-left:0.3rem; font-size:0.85rem;" oninput="App.onSimTimeChange()">
+                    </label>
+                    <label style="font-weight:500; font-size:0.85rem;">Step (s):
+                        <input type="number" id="sim-step" value="0.1" step="0.1" min="0.1" class="form-control" style="width:60px; padding:0.25rem 0.4rem; margin-left:0.3rem; font-size:0.85rem;" oninput="App.saveSimSettings()">
+                    </label>
+                    <div style="margin-left:auto; display:flex; gap:0.5rem; flex-wrap:wrap;">
+                        <div>Vehicles: <strong id="stat-total-vehicles" style="color:#2563eb;">0</strong></div>
+                        <div>Busiest: <strong id="stat-busiest-intersection" style="color:#d97706;">N/A</strong></div>
+                    </div>
+                </div>
+                <div class="header-actions" style="margin-top:0.75rem;">
+                    <button class="btn btn-secondary" onclick="App.toggleDarkMode()" id="btn-dark-mode">Dark Mode</button>
+                    <button class="btn btn-secondary" onclick="App.showHelp('xmlGuide')" title="One combined reference for how each tab's fields map to the generated XML">How Data Becomes XML</button>
+                    <input type="file" id="file-import-xml" accept=".xml" style="display:none" onchange="App.handleImportXML(event)">
+                    <button class="btn btn-secondary" onclick="document.getElementById('file-import-xml').click()">Import .xml</button>
+                    <button class="btn btn-secondary" onclick="App.exportToPDF()" title="Screenshot of just the currently open tab">Export PDF (current tab)</button>
+                    <button class="btn btn-primary" onclick="App.generateFullReport()" title="One document covering all 5 result tabs — every chart gets a caption and a data table" style="background-color:#0f766e; border-color:#0f766e;">Generate Report (PDF)</button>
+                    <button class="btn btn-full-xml" id="btn-copy-full-xml" onclick="App.copyFullXML()">Copy Full <code>Vehicles.rou.xml</code></button>
+                    <button class="btn btn-download-xml" id="btn-download-full-xml" onclick="App.downloadFullXML()">Download .xml</button>
+                </div>
+            </div>
+        </header>
+
+        <nav class="tab-nav" id="tab-nav">
+            <button class="tab-btn active" data-tab="tab-vehicles" id="btn-tab-vehicles">
+                <span class="tab-label">Vehicle Params</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-flows" id="btn-tab-flows">
+                <span class="tab-label">Flows</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-pedestrians" id="btn-tab-pedestrians">
+                <span class="tab-label">Pedestrians</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-bus" id="btn-tab-bus">
+                <span class="tab-label">Bus & Idling</span>
+            </button>
+
+            <button class="tab-btn" data-tab="tab-sim-results" id="btn-tab-sim-results">
+                <span class="tab-label">Simulation Results</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-validation" id="btn-tab-validation">
+                <span class="tab-label">Validation</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-mape-validation" id="btn-tab-mape-validation">
+                <span class="tab-label">MAPE Validation</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-emissions" id="btn-tab-emissions">
+                <span class="tab-label">Emissions Analysis</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-dwell-analysis" id="btn-tab-dwell-analysis">
+                <span class="tab-label">Dwell Time Analysis</span>
+            </button>
+        </nav>
+
+        <main class="main-content">
+            <!-- Tab 1: Vehicle Parameters -->
+            <div class="tab-pane active" id="tab-vehicles">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Vehicle Type Parameters</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('vehicles')">How to use</button>
+                            <button class="btn btn-copy" onclick="App.copyVehicleTypesXML()">Copy as XML</button>
+                            <button class="btn btn-secondary" onclick="App.resetVehicleTypes()">Reset Defaults</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div style="margin-bottom: 1.5rem; background: var(--bg-surface-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                            <p class="section-desc" style="margin-bottom: 0.5rem; font-weight: 500;">Import Full Configuration (Paste your full <code>Vehicles.rou.xml</code> code below to update all parameters and flows):</p>
+                            <textarea id="paste-full-xml" class="paste-area" style="height: 80px;" placeholder="Paste your full XML code here..."></textarea>
+                            <button class="btn btn-primary" onclick="App.handleFullXMLPaste()" style="margin-top:0.5rem;">Import Data</button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="data-table" id="vehicle-type-table">
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Flows -->
+            <div class="tab-pane" id="tab-flows">
+                <!-- Project Setup Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Project Setup &amp; Route Configuration</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('flows')">How to use</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="section-desc">Load a SUMO project folder using the header button, or manually define your routes and intervals below. Route IDs from the loaded project will appear automatically.</p>
+                        <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; margin-bottom:1rem;">
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Routes</label>
+                                <input type="number" id="flows-route-count" min="1" max="20" value="2" class="form-control" style="width:80px;" oninput="App.rebuildFlowsSetup()">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Intervals</label>
+                                <input type="number" id="flows-interval-count" min="1" max="30" value="8" class="form-control" style="width:80px;" oninput="App.rebuildFlowsTable()">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Interval Duration (min)</label>
+                                <input type="number" id="flows-interval-duration" min="1" max="60" value="10" class="form-control" style="width:80px;" oninput="App.rebuildFlowsTable()">
+                            </div>
+                            <button class="btn btn-primary" onclick="App.rebuildFlowsSetup()">Apply</button>
+                        </div>
+                        <!-- Route name config rows (injected by JS) -->
+                        <div id="flows-route-config" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Main Flows Table Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Traffic Flows by Route &amp; Interval</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-copy" onclick="App.copyFlowsXML()">Copy as SUMO XML</button>
+                            <button class="btn btn-secondary" onclick="App.resetFlowsTable()">Reset Table</button>
+                        </div>
+                    </div>
+                    <div class="card-body table-wrapper" id="flows-table-wrapper">
+                        <p class="placeholder-text" style="color:var(--text-secondary,#888);">Configure routes and intervals above, then fill in vehicle counts per interval.</p>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Tab 4: Pedestrian Flows -->
+            <div class="tab-pane" id="tab-pedestrians">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Pedestrian Crossing Setup</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('pedestrians')">How to use</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="section-desc">After loading a SUMO project folder, crossing IDs detected in .add.xml files will appear below. You can also add crossings manually. Assign a friendly name to each, then fill in pedestrian counts per interval.</p>
+                        <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; margin-bottom:1rem;">
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Crossings</label>
+                                <input type="number" id="ped-crossing-count" min="1" max="20" value="3" class="form-control" style="width:80px;" oninput="App.rebuildPedSetup()">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Intervals</label>
+                                <input type="number" id="ped-interval-count" min="1" max="30" value="8" class="form-control" style="width:80px;" oninput="App.rebuildPedTable()">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Interval Duration (min)</label>
+                                <input type="number" id="ped-interval-duration" min="1" max="60" value="10" class="form-control" style="width:80px;" oninput="App.rebuildPedTable()">
+                            </div>
+                            <button class="btn btn-primary" onclick="App.rebuildPedSetup()">Apply</button>
+                        </div>
+                        <!-- Crossing name config rows (injected by JS) -->
+                        <div id="ped-crossing-config" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Pedestrian Counts by Crossing &amp; Interval</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-copy" onclick="App.copyPedestrianXML()">Copy as SUMO XML</button>
+                        </div>
+                    </div>
+                    <div class="card-body table-wrapper" id="ped-dynamic-table-wrapper">
+                        <p class="placeholder-text" style="color:var(--text-secondary,#888);">Configure crossings and intervals above, then fill in pedestrian counts per interval.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 5: Bus & Idling -->
+            <div class="tab-pane" id="tab-bus">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Bus Stop Setup</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('bus')">How to use</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="section-desc">Loading a SUMO project folder auto-detects bus stop IDs from .add.xml files. You can also add stops manually. Assign a friendly name to each, then fill in dwell times and parking counts per interval below.</p>
+                        <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; margin-bottom:1rem;">
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Bus Stops</label>
+                                <input type="number" id="bus-stop-count" min="1" max="30" value="2" class="form-control" style="width:80px;" oninput="App.rebuildBusSetup()">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Intervals</label>
+                                <input type="number" id="bus-interval-count" min="1" max="30" value="8" class="form-control" style="width:80px;" oninput="App._busState.intervals=parseInt(this.value)||8; App.rebuildBusDwellTable(); App.rebuildParkingTable(); App.saveToLocal();">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Interval Duration (min)</label>
+                                <input type="number" id="bus-interval-duration" min="1" max="60" value="10" class="form-control" style="width:80px;" oninput="App._busState.intervalDuration=parseInt(this.value)||10; App.rebuildBusDwellTable(); App.rebuildParkingTable(); App.saveToLocal();">
+                            </div>
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Bus route ID (optional)</label>
+                                <input type="text" id="bus-route-id" placeholder="e.g. route_1" class="form-control" style="width:140px;" oninput="App._busState.busRouteId=this.value; App.saveToLocal();">
+                            </div>
+                            <button class="btn btn-primary" onclick="App.rebuildBusSetup()">Apply</button>
+                        </div>
+                        <p class="section-desc" style="font-size:0.8rem;">If your project has one main bus route, set its ID here so "Copy Full XML" attaches these stops' dwell times to that route's bus flows automatically.</p>
+                        <!-- Stop name config rows (injected by JS) -->
+                        <div id="bus-stop-config" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Bus Stop Definitions</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-copy" onclick="App.copyBusStopsXML()">Copy XML</button>
+                        </div>
+                    </div>
+                    <div class="card-body table-wrapper">
+                        <table class="data-table" id="bus-stop-table"></table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Bus Dwell Times by Stop &amp; Interval</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.resetBusDwells()" title="Clear all dwell times back to 0s">Reset</button>
+                        </div>
+                    </div>
+                    <div class="card-body table-wrapper" id="bus-dwell-table-wrapper">
+                        <p class="placeholder-text" style="color:var(--text-secondary,#888);">Add bus stops above first.</p>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Parking &amp; Idling Setup</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-copy" onclick="App.copyParkingXML()">Copy XML</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="section-desc">Loading a SUMO project folder auto-detects parking area IDs from .add.xml files. You can also add areas manually.</p>
+                        <div style="display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; margin-bottom:1rem;">
+                            <div>
+                                <label style="font-weight:500; display:block; margin-bottom:0.3rem; font-size:0.85rem;">Number of Parking Areas</label>
+                                <input type="number" id="parking-area-count" min="1" max="20" value="1" class="form-control" style="width:80px;" oninput="App.rebuildParkingSetup()">
+                            </div>
+                            <button class="btn btn-primary" onclick="App.rebuildParkingSetup()">Apply</button>
+                        </div>
+                        <!-- Area name/route/duration config rows (injected by JS) -->
+                        <div id="parking-area-config" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Parking &amp; Idling Vehicles by Area &amp; Interval</h2>
+                    </div>
+                    <div class="card-body table-wrapper" id="parking-table-wrapper">
+                        <p class="placeholder-text" style="color:var(--text-secondary,#888);">Add parking areas above first.</p>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- Simulation Results (populated by "Run & Analyze") -->
+            <div class="tab-pane" id="tab-sim-results">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Simulation Results</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('simResults')">How to use</button>
+                            <button class="btn btn-secondary" onclick="App.exportToPDF()">Export PDF</button>
+                        </div>
+                    </div>
+                    <div class="card-body" id="sim-results-content">
+                        <p class="placeholder-text">No simulation results yet — click "Run & Analyze" in the header to run SUMO and see vehicle speeds and other results here.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane" id="tab-validation">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Validation — E1 Detectors</h2>
+                        <div class="action-bar" style="display:flex; gap:0.5rem; align-items:center;">
+                            <button class="btn btn-secondary" onclick="App.showHelp('validation')">How to use</button>
+                            <button class="btn btn-secondary" onclick="App.exportToPDF()">Export PDF</button>
+                            <button class="btn btn-primary" onclick="App.saveObservedGEH()" style="background-color: #10b981; border-color: #10b981;">Save Observed GEH</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <p class="section-desc">Paste E1 detector output XML or upload the file. The detector list and number of tables shown are read directly from the data — no fixed detector count.</p>
+                        <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap:wrap;">
+                            <input type="file" id="upload-validation-xml" accept=".xml" class="form-control" style="width: 300px;" onchange="App.handleValidationFileUpload(event)">
+                            <span style="color: var(--text-secondary); font-size: 0.9rem;">or paste below:</span>
+                            <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem; margin-left:auto;">
+                                Interval (min):
+                                <input type="number" min="1" id="validation-interval-minutes" placeholder="auto" title="Leave blank to use the data's own interval size, or set a larger value to combine several raw intervals into one row."
+                                    style="width:70px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onValidationIntervalChange()">
+                            </label>
+                            <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem;">
+                                Show from:
+                                <input type="text" placeholder="00:00" id="validation-range-from" title="Only show interval rows starting at or after this clock time. Leave blank to show the full simulation."
+                                    style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onValidationIntervalChange()">
+                                to
+                                <input type="text" placeholder="24:00" id="validation-range-to" title="Only show interval rows ending at or before this clock time. Leave blank to show the full simulation."
+                                    style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onValidationIntervalChange()">
+                            </label>
+                        </div>
+                        <textarea id="paste-validation" class="paste-area paste-area-large" placeholder="Paste detector_output.xml code here..."></textarea>
+                        <button class="btn btn-primary" onclick="App.handleValidationPaste('paste-validation')" style="margin-top:1rem">Process Validation Data</button>
+                        <div id="validation-results" style="margin-top:1.5rem"></div>
+                        <div class="card" style="margin-top:1rem">
+                            <div class="card-header">
+                                <h3 class="card-title">Saved Validation Runs</h3>
+                                <div class="action-bar">
+                                    <button class="btn btn-secondary" onclick="App.loadValidationRuns()">Refresh</button>
+                                </div>
+                            </div>
+                            <div class="card-body" id="saved-validation-runs">
+                                <p class="placeholder-text">No validation runs saved yet. Upload detector data above.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+                        <!-- Tab: Emissions Analysis -->
+            <div class="tab-pane" id="tab-emissions">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Emissions Analysis — Multi-Scenario Comparison</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('emissions')">How to use</button>
+                            <button class="btn btn-secondary" onclick="App.exportToPDF()" style="padding: 0.5rem 1rem;">Export PDF</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <!-- Fuel Prices -->
+                        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin-bottom:1.25rem; padding:0.75rem 1rem; background:var(--bg-surface-hover,#f4f4f4); border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                            <label style="font-weight:500; font-size:0.88rem;">Diesel (LKR/L):
+                                <input type="number" id="fuel-price-diesel" value="382" class="form-control" style="width:80px; padding:0.3rem 0.5rem; margin-left:0.3rem;" oninput="App.saveFuelPriceMeta()">
+                            </label>
+                            <label style="font-weight:500; font-size:0.88rem;">Petrol (LKR/L):
+                                <input type="number" id="fuel-price-petrol" value="414" class="form-control" style="width:80px; padding:0.3rem 0.5rem; margin-left:0.3rem;" oninput="App.saveFuelPriceMeta()">
+                            </label>
+                            <label style="font-weight:500; font-size:0.88rem;">Prices as of:
+                                <input type="text" id="fuel-price-date" value="2026-07-10" class="form-control" style="width:120px; padding:0.3rem 0.5rem; margin-left:0.3rem;" oninput="App.saveFuelPriceMeta()" placeholder="YYYY-MM-DD">
+                            </label>
+                            <button class="btn btn-secondary" style="padding:0.35rem 0.7rem; font-size:0.82rem;" onclick="App.detectLocationForFuelPrices()">Detect my region</button>
+                        </div>
+                        <div id="fuel-price-reminder"></div>
+
+                        <!-- Up to 5 Scenario Upload Slots -->
+                        <p class="section-desc" style="margin-bottom:0.75rem;">Upload up to 5 <code>tripinfo_data.xml</code> files, one per scenario. Name each scenario using the editable text field. Click "Parse &amp; Compare" when ready.</p>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;" id="emissions-scenario-grid">
+                            <!-- Scenario 1 -->
+                            <div style="background:var(--bg-surface-hover,#f4f4f4); padding:1rem; border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                                <input type="text" id="scenario-a-name" value="Scenario 1: Baseline" class="form-control" style="font-weight:500; font-size:0.9rem; margin-bottom:0.5rem; width:100%; border:1px dashed var(--border-subtle,#ccc); background:transparent;">
+                                <input type="file" id="file-emissions-scenario-a" accept=".xml" class="form-control" style="width:100%; margin-bottom:0.4rem;" onchange="App.handleEmissionsParse()">
+                                <small style="color:var(--text-secondary,#888);">tripinfo_data.xml</small>
+                            </div>
+                            <!-- Scenario 2 -->
+                            <div style="background:var(--bg-surface-hover,#f4f4f4); padding:1rem; border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                                <input type="text" id="scenario-b-name" value="Scenario 2: With Idling" class="form-control" style="font-weight:500; font-size:0.9rem; margin-bottom:0.5rem; width:100%; border:1px dashed var(--border-subtle,#ccc); background:transparent;">
+                                <input type="file" id="file-emissions-scenario-b" accept=".xml" class="form-control" style="width:100%; margin-bottom:0.4rem;" onchange="App.handleEmissionsParse()">
+                                <small style="color:var(--text-secondary,#888);">tripinfo_data.xml</small>
+                            </div>
+                            <!-- Scenario 3 -->
+                            <div style="background:var(--bg-surface-hover,#f4f4f4); padding:1rem; border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                                <input type="text" id="scenario-c-name" value="Scenario 3" class="form-control" style="font-weight:500; font-size:0.9rem; margin-bottom:0.5rem; width:100%; border:1px dashed var(--border-subtle,#ccc); background:transparent;">
+                                <input type="file" id="file-emissions-scenario-c" accept=".xml" class="form-control" style="width:100%; margin-bottom:0.4rem;" onchange="App.handleEmissionsParse()">
+                                <small style="color:var(--text-secondary,#888);">tripinfo_data.xml (optional)</small>
+                            </div>
+                            <!-- Scenario 4 -->
+                            <div style="background:var(--bg-surface-hover,#f4f4f4); padding:1rem; border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                                <input type="text" id="scenario-d-name" value="Scenario 4" class="form-control" style="font-weight:500; font-size:0.9rem; margin-bottom:0.5rem; width:100%; border:1px dashed var(--border-subtle,#ccc); background:transparent;">
+                                <input type="file" id="file-emissions-scenario-d" accept=".xml" class="form-control" style="width:100%; margin-bottom:0.4rem;" onchange="App.handleEmissionsParse()">
+                                <small style="color:var(--text-secondary,#888);">tripinfo_data.xml (optional)</small>
+                            </div>
+                            <!-- Scenario 5 -->
+                            <div style="background:var(--bg-surface-hover,#f4f4f4); padding:1rem; border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                                <input type="text" id="scenario-e-name" value="Scenario 5" class="form-control" style="font-weight:500; font-size:0.9rem; margin-bottom:0.5rem; width:100%; border:1px dashed var(--border-subtle,#ccc); background:transparent;">
+                                <input type="file" id="file-emissions-scenario-e" accept=".xml" class="form-control" style="width:100%; margin-bottom:0.4rem;" onchange="App.handleEmissionsParse()">
+                                <small style="color:var(--text-secondary,#888);">tripinfo_data.xml (optional)</small>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:1rem; margin-bottom:2rem;">
+                            <button class="btn btn-primary" onclick="App.handleEmissionsParse()" style="padding:0.75rem 1.5rem; font-size:1rem;">Parse &amp; Compare Scenarios</button>
+                        </div>
+
+                        <div id="emissions-results" style="display:none;">
+                            <!-- Traffic Health Score Card -->
+                            <div id="health-score-card" style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:2rem;">
+                                <div class="stat-box" id="grade-air" style="text-align:center; border-top:4px solid #6366f1;">
+                                    <div class="stat-value" style="font-size:2.5rem; color:#6366f1;">—</div>
+                                    <div class="stat-label">Air Quality</div>
+                                </div>
+                                <div class="stat-box" id="grade-fuel" style="text-align:center; border-top:4px solid #f59e0b;">
+                                    <div class="stat-value" style="font-size:2.5rem; color:#f59e0b;">—</div>
+                                    <div class="stat-label">Fuel Efficiency</div>
+                                </div>
+                                <div class="stat-box" id="grade-flow" style="text-align:center; border-top:4px solid #3b82f6;">
+                                    <div class="stat-value" style="font-size:2.5rem; color:#3b82f6;">—</div>
+                                    <div class="stat-label">Traffic Flow</div>
+                                </div>
+                                <div class="stat-box" id="grade-time" style="text-align:center; border-top:4px solid #ef4444;">
+                                    <div class="stat-value" style="font-size:2.5rem; color:#ef4444;">—</div>
+                                    <div class="stat-label">Time Penalty</div>
+                                </div>
+                                <div class="stat-box" id="grade-overall" style="text-align:center; border-top:4px solid #10b981; background:rgba(16,185,129,0.05);">
+                                    <div class="stat-value" style="font-size:2.5rem; color:#10b981; font-weight:800;">—</div>
+                                    <div class="stat-label" style="font-weight:700;">Overall Grade</div>
+                                </div>
+                            </div>
+                            <!-- CO2 Callout -->
+                            <div class="card" style="background:#ecfdf5; border-color:#a7f3d0; margin-bottom:2rem;">
+                                <div class="card-body" style="text-align:center;">
+                                    <h3 style="color:#065f46; margin-bottom:0.5rem;">Carbon Footprint Impact</h3>
+                                    <p style="font-size:1.1rem; margin-bottom:0.5rem;">Total CO2 Penalty (Extra Emitted): <strong id="co2-penalty-kg">0</strong> kg</p>
+                                    <p style="font-size:1.2rem; color:#047857; font-weight:bold;">Equivalent to <span id="co2-trees" style="font-size:1.6rem;">0</span> mature trees' yearly absorption </p>
+                                </div>
+                            </div>
+                            <!-- Comprehensive Impact Table -->
+                            <div class="card" style="margin-bottom:2rem;">
+                                <div class="card-header"><h3 class="card-title" style="color:#b91c1c;">Comprehensive Impact Analysis (Simulation Period)</h3></div>
+                                <div class="card-body table-wrapper">
+                                    <table class="data-table">
+                                        <thead><tr id="cost-table-header-row"></tr></thead>
+                                        <tbody id="cost-analysis-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <!-- Charts Grid -->
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:2rem;">
+                                <div class="card"><div class="card-header"><h3 class="card-title">Total Network Emissions (Grams)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-total-emissions"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network-Wide Fuel Consumption</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-ripple-effect"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network Delay (Avg Time Loss/Vehicle)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-delay-time"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Stop-and-Go Traffic (Total Forced Stops)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-stops-time"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network PMx Emissions (Health Hazard)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-pmx-time"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network NOx Emissions (Health Hazard)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-nox-time"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network CO Emissions (Carbon Monoxide)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-co-time"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Network HC Emissions (Hydrocarbons)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-hc-time"></canvas></div></div></div>
+                                <div class="card" style="grid-column:span 2;"><div class="card-header"><h3 class="card-title">Network CO2 Emissions (Carbon Dioxide, Kg)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-co2-time"></canvas></div></div></div>
+                                <div class="card" style="grid-column:span 2;"><div class="card-header"><h3 class="card-title">Fuel Penalty Breakdown by Vehicle Type (Petrol)</h3></div><div class="card-body" style="display:flex; flex-direction:column; align-items:center; max-height:450px;"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-fuel-pie"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Avg Financial Penalty (Petrol) (LKR)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-fuel-bar-petrol"></canvas></div></div></div>
+                                <div class="card"><div class="card-header"><h3 class="card-title">Avg Financial Penalty (Diesel) (LKR)</h3></div><div class="card-body"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-fuel-bar-diesel"></canvas></div></div></div>
+                                <div class="card" style="grid-column:span 2;"><div class="card-header"><h3 class="card-title">Avg Time Penalty per Vehicle Type (s/trip)</h3></div><div class="card-body" style="height:350px;"><div style="position:relative; width:100%; height:320px;"><canvas id="chart-time-penalty"></canvas></div></div></div>
+                                <div class="card" style="grid-column:span 2;"><div class="card-header"><h3 class="card-title">Emission Intensity Heatmap</h3></div><div class="card-body" id="heatmap-container"></div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 5: Dwell Time Impact Analysis -->
+            <div class="tab-pane" id="tab-dwell-analysis">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Dwell Time Impact Analysis (Inflection Points)</h2>
+                        <div class="action-bar">
+                            <button class="btn btn-secondary" onclick="App.showHelp('dwell')">How to use</button>
+                            <button class="btn btn-secondary" onclick="App.exportToPDF()">Export PDF</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; padding:0.75rem 1rem; background:var(--bg-surface-hover,#f4f4f4); border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
+                            <button class="btn btn-primary" id="btn-dwell-sweep" onclick="App.runDwellSweep()">Run Dwell Sweep (5 runs, desktop app only)</button>
+                            <span style="font-size:0.82rem; color:var(--text-secondary,#888);">Automatically runs SUMO once per dwell time below (0/10/20/45/90s) using your configured bus stops — no manual export/upload needed.</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 2rem; background: var(--bg-surface-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                            
+                            <div class="upload-col">
+                                <label style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom: 0.5rem; color: var(--text-muted)"><input type="text" id="dwell-name-0" value="Scenario 1: 0s" style="width:100%; border:1px dashed var(--border-subtle); background:transparent; color:inherit; font:inherit; padding:2px;"></label>
+                                <input type="file" id="dwell-file-0" class="form-control" accept=".xml" onchange="App.handleDwellParse()" style="font-size: 0.8rem; padding: 0.25rem;">
+                            </div>
+                            
+                            <div class="upload-col">
+                                <label style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom: 0.5rem; color: var(--text-muted)"><input type="text" id="dwell-name-10" value="Scenario 2: 10s" style="width:100%; border:1px dashed var(--border-subtle); background:transparent; color:inherit; font:inherit; padding:2px;"></label>
+                                <input type="file" id="dwell-file-10" class="form-control" accept=".xml" onchange="App.handleDwellParse()" style="font-size: 0.8rem; padding: 0.25rem;">
+                            </div>
+
+                            <div class="upload-col">
+                                <label style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom: 0.5rem; color: var(--text-muted)"><input type="text" id="dwell-name-20" value="Scenario 3: 20s" style="width:100%; border:1px dashed var(--border-subtle); background:transparent; color:inherit; font:inherit; padding:2px;"></label>
+                                <input type="file" id="dwell-file-20" class="form-control" accept=".xml" onchange="App.handleDwellParse()" style="font-size: 0.8rem; padding: 0.25rem;">
+                            </div>
+
+                            <div class="upload-col">
+                                <label style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom: 0.5rem; color: var(--text-muted)"><input type="text" id="dwell-name-45" value="Scenario 4: 45s" style="width:100%; border:1px dashed var(--border-subtle); background:transparent; color:inherit; font:inherit; padding:2px;"></label>
+                                <input type="file" id="dwell-file-45" class="form-control" accept=".xml" onchange="App.handleDwellParse()" style="font-size: 0.8rem; padding: 0.25rem;">
+                            </div>
+
+                            <div class="upload-col">
+                                <label style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom: 0.5rem; color: var(--text-muted)"><input type="text" id="dwell-name-90" value="Scenario 5: 90s" style="width:100%; border:1px dashed var(--border-subtle); background:transparent; color:inherit; font:inherit; padding:2px;"></label>
+                                <input type="file" id="dwell-file-90" class="form-control" accept=".xml" onchange="App.handleDwellParse()" style="font-size: 0.8rem; padding: 0.25rem;">
+                            </div>
+
+                        </div>
+
+                        
+
+                        
+                        <div id="dwell-results" style="display:none;">
+                            
+                            <div class="card" style="margin-bottom: 2rem;">
+                                <div class="card-header"><h3 class="card-title">Publication-Ready Evaluation Matrix</h3></div>
+                                <div class="card-body table-wrapper">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Tested Dwell Time</th>
+                                                <th>Total Input Fleet (Vehicles Loaded)</th>
+                                                <th>Avg. Network Delay (s/veh)</th>
+                                                
+                                                <th>Total CO₂ Emissions (kg)</th>
+                                                <th>Total NOx Emissions (g)</th>
+                                                <th>Total PMx Emissions (g)</th>
+                                                <th>Fuel Consumption (L)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="dwell-matrix-tbody">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                                
+                                <!-- New Advanced Thesis Charts -->
+                                <div class="card" style="grid-column: span 2;">
+                                    <div class="card-header"><h3 class="card-title">The Gridlock Tipping Point (Throughput vs. Delay)</h3></div>
+                                    <div class="card-body" style="position: relative; height:400px;"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-tipping"></canvas></div>
+<div id="formula-chart-dwell-tipping" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -1.97x² + 252.12x - 3020.2 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9996</i></div></div>
+                                </div>
+                                
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Average Network Speed Collapse (km/h)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-speed"></canvas></div>
+<div id="formula-chart-dwell-speed" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -0.00x² - 0.08x + 36.19 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9926</i></div></div>
+                                </div>
+                                
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Financial Drain on Public (LKR)*</h3></div>
+                                    <div class="card-body"><canvas id="chart-dwell-financial"></canvas></div>
+                                </div>
+                                
+                                <div class="card" style="grid-column: span 2;">
+                                    <div class="card-header"><h3 class="card-title">The Relative Domino Effect (% Increase from Baseline)</h3></div>
+                                    <div class="card-body" style="position: relative; height:350px;"><canvas id="chart-dwell-relative"></canvas></div>
+                                </div>
+                                
+                                
+
+                                <!-- Original Dwell Charts (Kept for reference) -->
+                                <div class="card" style="grid-column: span 2;">
+                                    <div class="card-header"><h3 class="card-title">Inflection Point: Network Time Loss vs. Bus Dwell Time</h3></div>
+                                    <div class="card-body" style="position: relative; height:400px;"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-timeloss"></canvas></div>
+<div id="formula-chart-dwell-timeloss" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -1.97x² + 252.12x - 3020.2 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9996</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Environmental Impact: CO₂ Emissions (kg)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-co2"></canvas></div>
+<div id="formula-chart-dwell-co2" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -6.11x² + 874.52x - 3804.59 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9972</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Environmental Impact: NOx Emissions (g)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-nox"></canvas></div>
+<div id="formula-chart-dwell-nox" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = 0.01x² + 0.35x - 4.90 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9959</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Environmental Impact: PMx Emissions (g)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-pmx"></canvas></div>
+<div id="formula-chart-dwell-pmx" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -0.00x² + 0.02x - 0.22 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9998</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Environmental Impact: CO Emissions (g)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-co"></canvas></div>
+<div id="formula-chart-dwell-co" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -0.05x² + 10.45x - 83.21 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9952</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Environmental Impact: HC Emissions (g)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-hc"></canvas></div>
+<div id="formula-chart-dwell-hc" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -0.01x² + 1.25x - 12.04 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9912</i></div></div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="card-header"><h3 class="card-title">Resource Drain: Total Fuel Consumption (L)</h3></div>
+                                    <div class="card-body"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-fuel"></canvas></div>
+<div id="formula-chart-dwell-fuel" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -0.00x² + 0.28x - 1.21 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9972</i></div></div>
+                                </div>
+
+                                <div class="card" style="grid-column: span 2;">
+                                    <div class="card-header"><h3 class="card-title">Traffic Volatility: Total Stop-and-Go Occurrences</h3></div>
+                                    <div class="card-body" style="position: relative; height:300px;"><div style="position: relative; width: 100%; height: 320px;"><canvas id="chart-dwell-stops"></canvas></div>
+<div id="formula-chart-dwell-stops" style="text-align: center; width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9rem; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 5px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.2);"><i>y = -3.75x² + 459.78x - 4616.6 &nbsp;&nbsp;|&nbsp;&nbsp; R² = 0.9995</i></div></div>
+                                </div>
+                                
+                                
+                                
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+<!-- Tab: MAPE Validation -->
+    <div class="tab-pane" id="tab-mape-validation">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">MAPE Time Gather Validation</h2>
+                <div class="action-bar">
+                    <button class="btn btn-secondary" onclick="App.showHelp('mape')">How to use</button>
+                    <button class="btn btn-secondary" onclick="App.exportToPDF()">Export PDF</button>
+                    <button class="btn btn-secondary" onclick="App.renderMapeValidation()">Refresh</button>
+                    <button class="btn btn-primary" onclick="App.saveObservedMAPE()" style="background-color: #10b981; border-color: #10b981;">Save Observed MAPE</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <p class="section-desc">Paste travel_times_output.xml (meandata) output, or your own E1 detector_output.xml, or upload the file — the format is auto-detected. The row list and number of tables shown are read directly from the data.</p>
+                <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap:wrap;">
+                    <input type="file" id="upload-mape-xml" accept=".xml" class="form-control" style="width: 300px;" onchange="App.handleMapeFileUpload(event)">
+                    <span style="color: var(--text-secondary); font-size: 0.9rem;">or paste below:</span>
+                    <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem; margin-left:auto;">
+                        Interval (min):
+                        <input type="number" min="1" id="mape-interval-minutes" placeholder="auto" title="Leave blank to use the data's own interval size, or set a larger value to combine several raw intervals into one row."
+                            style="width:70px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
+                    </label>
+                    <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem;">
+                        Show from:
+                        <input type="text" placeholder="00:00" id="mape-range-from" title="Only show interval rows starting at or after this clock time. Leave blank to show the full simulation."
+                            style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
+                        to
+                        <input type="text" placeholder="24:00" id="mape-range-to" title="Only show interval rows ending at or before this clock time. Leave blank to show the full simulation."
+                            style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
+                    </label>
+                </div>
+                <textarea id="paste-mape" class="paste-area paste-area-large" placeholder="Paste travel_times_output.xml code here..."></textarea>
+                <button class="btn btn-primary" onclick="App.handleMapePaste()" style="margin-top:1rem">Process MAPE Data</button>
+            </div>
+            <div class="card-content" id="mape-validation-container" style="padding: 1.5rem; border-top: 1px solid var(--border-color);">
+                <!-- Content will be rendered by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="data.js?v=23"></script>
+    <script src="detector.js?v=10"></script>
+    <script src="emissionsParser.js?v=1"></script>
+    <script src="graphDistance.js?v=1"></script>
+    <script src="intervalAggregation.js?v=1"></script>
+    <script src="gehMape.js?v=1"></script>
+    <script src="app.js?v=116"></script>
+    <script src="xmlBuilder.js?v=84"></script>
+
+    <!-- Help Modal -->
+    <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-card,#fff); border-radius:12px; max-width:580px; width:92%; max-height:80vh; overflow-y:auto; padding:2rem; box-shadow:0 20px 60px rgba(0,0,0,0.3); position:relative;">
+            <button onclick="App.closeHelp()" style="position:absolute; top:1rem; right:1rem; background:none; border:none; font-size:1.5rem; cursor:pointer; color:var(--text-secondary,#555);"></button>
+            <h2 id="help-title" style="margin:0 0 1rem; color:var(--accent-primary,#2563eb); font-size:1.2rem;">How to use this tab</h2>
+            <div id="help-body" style="font-size:0.9rem; line-height:1.7; color:var(--text-primary,#222);"></div>
+        </div>
+    </div>
+
+    <div id="vtype-map-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9000; align-items:center; justify-content:center;">
+        <div style="background:var(--bg-card,#fff); border-radius:12px; max-width:520px; width:92%; max-height:80vh; overflow-y:auto; padding:2rem; box-shadow:0 20px 60px rgba(0,0,0,0.3); position:relative;">
+            <h2 style="margin:0 0 0.5rem; color:var(--accent-primary,#2563eb); font-size:1.2rem;">Match Your Vehicle Types</h2>
+            <p style="font-size:0.85rem; color:var(--text-secondary,#666); margin:0 0 1rem;">Your project's vehicle type ids don't match this tool's 6 built-in categories, so the Flows/Parking tables couldn't be auto-filled for them. Tell us which category each one maps to — this only needs to be done once per project.</p>
+            <div id="vtype-map-list" style="display:flex; flex-direction:column; gap:0.6rem; margin-bottom:1.25rem;"></div>
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+                <button class="btn btn-secondary" onclick="App.closeVTypeMapModal()">Skip</button>
+                <button class="btn btn-primary" onclick="App.saveVTypeMapModal()">Apply &amp; Fill Tables</button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
