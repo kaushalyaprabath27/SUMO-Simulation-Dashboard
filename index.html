@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SUMO Simulation Analysis Dashboard</title>
     <meta name="description" content="Browser-based analysis dashboard for SUMO traffic simulation output">
-    <link rel="stylesheet" href="styles.css?v=8">
+    <link rel="stylesheet" href="styles.css?v=9">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -151,7 +151,10 @@
                 </button>
             </div>
             <div class="header-content">
-                <h1 class="app-title">SUMO Simulation Analysis Dashboard</h1>
+                <h1 class="app-title" style="display:flex; align-items:center; gap:0.6rem;">
+                    <img src="Icon.png" alt="" style="width:36px; height:36px; border-radius:8px;">
+                    SUMO Simulation Analysis Dashboard
+                </h1>
                 <div style="display:flex; flex-wrap:wrap; gap:0.75rem; align-items:center; margin-top:0.5rem;">
                     <button class="btn btn-primary" id="btn-load-project" onclick="App.loadSumoProject()" style="font-size:0.95rem; padding:0.5rem 1.1rem;">
                         Load SUMO Project Folder
@@ -625,10 +628,6 @@
                         </div>
                     </div>
                     <div class="card-body">
-                        <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; padding:0.75rem 1rem; background:var(--bg-surface-hover,#f4f4f4); border-radius:8px; border:1px solid var(--border-subtle,#ccc);">
-                            <button class="btn btn-primary" id="btn-dwell-sweep" onclick="App.runDwellSweep()">Run Dwell Sweep (5 runs, desktop app only)</button>
-                            <span style="font-size:0.82rem; color:var(--text-secondary,#888);">Automatically runs SUMO once per dwell time below (0/10/20/45/90s) using your configured bus stops — no manual export/upload needed.</span>
-                        </div>
                         <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin-bottom: 2rem; background: var(--bg-surface-hover); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
                             
                             <div class="upload-col">
@@ -815,8 +814,12 @@
     <script src="graphDistance.js?v=1"></script>
     <script src="intervalAggregation.js?v=1"></script>
     <script src="gehMape.js?v=1"></script>
-    <script src="app.js?v=116"></script>
-    <script src="xmlBuilder.js?v=84"></script>
+    <script src="polyReg.js?v=1"></script>
+    <script src="pedMatching.js?v=1"></script>
+    <script src="reportDataPrep.js?v=1"></script>
+    <script src="xmlBuilderCore.js?v=1"></script>
+    <script src="app.js?v=120"></script>
+    <script src="xmlBuilder.js?v=85"></script>
 
     <!-- Help Modal -->
     <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9000; align-items:center; justify-content:center;">

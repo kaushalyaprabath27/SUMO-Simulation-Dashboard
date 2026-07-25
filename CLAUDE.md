@@ -43,9 +43,11 @@ a quick-start; this file is the deeper technical reference.
   target actually configured is `win`/`nsis`). Current version at last
   check: 1.0.31.
 - No CI, no Docker, no lint config, no TypeScript. There is now `npm test`
-  (Node's built-in `node --test`, no dependency added) covering four
-  extracted pure modules — 46 tests total. See "Testing" below for exactly
-  what's covered and what still isn't.
+  (Node's built-in `node --test`, no dependency added) covering eight
+  extracted pure modules — 100 tests total — plus a separate
+  `npm run test:pdf-smoke` that needs a real Electron window (can't run
+  under plain Node). See "Testing" below for exactly what's covered and
+  what still isn't.
 - Git repository, MIT-licensed (`LICENSE.txt`). `package.json`'s
   `"private": true` just opts out of `npm publish` (this isn't an npm
   package) — unrelated to the repo's own visibility.
@@ -63,11 +65,16 @@ a quick-start; this file is the deeper technical reference.
 | `emissionsWorker.js` | ~15 | Web Worker entry point — `importScripts('emissionsParser.js')`, parses off the main thread so a large tripinfo file doesn't freeze the UI. |
 | `graphDistance.js` | ~85 | `computeLaneGraphDistance()` — the Dijkstra lane-graph shortest-path calc behind MAPE's "📐 Auto" segment-distance button, extracted verbatim from `App._computeDetectorDistance` for Node testability. |
 | `intervalAggregation.js` | ~50 | `aggregateRecordsByInterval()` — the interval-bucketing logic behind Validation/MAPE's "Interval (min)" control, extracted verbatim from `App._aggregateRecordsByInterval` (which was already `this`-free). |
-| `gehMape.js` | ~85 | GEH and MAPE formulas/status-threshold functions, extracted verbatim from `App._buildGEHTables`/`App._renderMapeFromDetectorRaw`/`App._renderMapeFromRaw`. Deliberately keeps **two distinct** MAPE error/status/model-status function sets (detector-pair format vs. edge format) rather than unifying them — see Formulas section for why they actually differ. |
-| `xmlBuilder.js` | ~127 | `App._buildFullXML()` — combined demand XML export. |
-| `index.html` | ~845 | All 9 tabs' markup, splash screen, global error overlay. Loads `emissionsParser.js`/`graphDistance.js`/`intervalAggregation.js`/`gehMape.js` via `<script>` before `app.js`. |
+| `gehMape.js` | ~90 | GEH and MAPE formulas/status-threshold functions, extracted verbatim from `App._buildGEHTables`/`App._renderMapeFromDetectorRaw`/`App._renderMapeFromRaw`. The two MAPE renderers' error/status logic — previously two diverging implementations — has since been **unified** onto the standard-MAPE formula; see Formulas section for the full writeup of what diverged and why. |
+| `polyReg.js` | ~110 | `calculatePolyReg()` — the Dwell Time Analysis tab's quadratic sensitivity-curve fit, extracted verbatim from `App.calculatePolyReg` for Node testability. Now includes a domain-plausibility guard (see Formulas section) that flags a fitted curve predicting a physically-impossible negative value. |
+| `pedMatching.js` | ~90 | `matchPedFlowToCrossing()`/`containsSeq()`/`findNearestIntervalIndex()` — the pedestrian-crossing matching decision logic extracted from `App._applyParsedPedData` (the DOM/state side effects — table rebuilds, `_pedState` writes, toasts — stay in `app.js`; only the "which crossing/direction does this personFlow match" decision moved out). |
+| `reportDataPrep.js` | ~30 | `fmtNum()`/`tableFromChart()` — the pure data-shaping helpers that feed the PDF report's per-chart tables, extracted from `App.generateFullReport`. The PDF rendering itself (jsPDF/html2canvas calls) is smoke-tested separately — see "Testing" below. |
+| `xmlBuilderCore.js` | ~140 | `buildFullXML()` — the combined demand-XML generator (vTypes + flows + pedestrian crossings + bus dwell + parking), extracted from `App._buildFullXML` (`xmlBuilder.js`) with every implicit `App`/`document` read replaced by an explicit parameter. This is the literal "builds demand XML" deliverable the whole app exists for (see this file's opening section) — previously entirely untested. |
+| `xmlBuilder.js` | ~30 | `App._buildFullXML()` — now a thin wrapper that gathers `App`'s live state (`_flowsState`/`_pedState`/`_busState`/`_customVehicleTypes`/`project.crossingEdges`, the `#sim-start-time` input, `App._buildVTypeXML`) and delegates to `xmlBuilderCore.js`. |
+| `index.html` | ~845 | All 9 tabs' markup, splash screen, global error overlay. Loads `emissionsParser.js`/`graphDistance.js`/`intervalAggregation.js`/`gehMape.js`/`polyReg.js`/`pedMatching.js`/`reportDataPrep.js`/`xmlBuilderCore.js` via `<script>` before `app.js`. |
 | `styles.css` | ~389 | Plain CSS, light/dark via `body.dark-mode`. |
-| `tests/*.test.js` | ~450 total | `node --test` coverage — 46 tests across 4 files, all passing. See "Testing" below. |
+| `tests/*.test.js` | ~900 total | `node --test` coverage — 100 tests across 8 files, all passing. See "Testing" below. |
+| `tests/pdfSmoke/index.js` | ~140 | A separate, non-`node --test` smoke test for `App.generateFullReport` — needs a real Electron window (jsPDF/Chart.js/DOM), run via `npm run test:pdf-smoke`. See "Testing" below. |
 
 ## `main.js` — IPC channels (exact contract)
 
@@ -200,28 +207,61 @@ wrapping every persist in try/catch.
   Calibration). Per-detector "model status": `≥85%` of intervals valid →
   Success; `≥50%` → Needs Calibration; else → Failed. Unit-tested in
   `tests/gehMape.test.js`, including the `M=C=0` division-by-zero guard.
-- **MAPE % error — two DISTINCT implementations, not one.** There are two
-  independent MAPE renderers in `app.js`, and their formulas genuinely
-  differ (confirmed while extracting them — not something introduced here):
-  - Detector-pair format (`_renderMapeFromDetectorRaw`, `gehMape.js`'s
-    `calculateMapeError`/`getMapeStatus`/`getMapeModelStatus`): `errPct =
-    (obs > 0 && sim > 0) ? |sim-obs|/obs*100 : 0` — a segment with no
-    simulated value yet (`sim=0`) reads as "not yet comparable" (0%), not a
-    100% miss. Status also has two pre-error configuration states ("Needs
-    both detectors", "Needs distance") on top of the usual `≤10%`/`≤15%`
-    thresholds.
-  - Edge/meandata format (`_renderMapeFromRaw`, `gehMape.js`'s
-    `calculateMapeErrorEdgeFormat`/`getMapeStatusEdgeFormat`/
-    `getMapeModelStatusEdgeFormat`): `errPct = obs > 0 ? |sim-obs|/obs*100 :
-    0` — **no** `sim > 0` guard, so `sim=0` with a real observed value *is*
-    counted as a literal 100% error here. Its model-status rollup also has
-    no "No data in this window" guard on an empty interval list — with
-    `totalCount=0` it silently produces `"NaN%".toFixed` → `NaN >= 75` →
-    `false` → falls through to `'Needs Calibration'` rather than erroring.
-  Both were extracted **as-is** and kept deliberately separate rather than
-  unified, since reconciling them would change behavior, not just relocate
-  code — see `gehMape.js`'s own comments and `tests/gehMape.test.js` for
-  both sets of cases side by side.
+- **MAPE % error — now ONE unified formula** (previously two diverging
+  implementations; this was fixed after an investigation found a real
+  misclassification, not just a theoretical inconsistency — see History).
+  `gehMape.js`'s `calculateMapeError(sim, obs) = obs > 0 ? |sim-obs|/obs*100
+  : 0` — the standard MAPE definition, undefined only when the *observed*
+  (actual) value is zero. A zero *simulated* value is a normal data point
+  meaning a 100% miss, not a special case. Used by both MAPE renderers
+  (`_renderMapeFromDetectorRaw` and `_renderMapeFromRaw`). Threshold
+  classification (`≤10%` Valid (Excellent), `≤15%` Marginal (Acceptable),
+  `>15%` Invalid) is shared via `getMapeStatusEdgeFormat(errPct)`;
+  `getMapeStatus(hasBoth, distance, errPct)` (detector-pair segments) checks
+  its two extra configuration states first ("Needs both detectors", "Needs
+  distance" — not configured yet, not a calibration failure) and otherwise
+  delegates to the same shared threshold function, so the two paths can no
+  longer drift apart on the numeric classification itself.
+
+  **What was wrong, concretely** (found while investigating, fixed after
+  confirming it — not a hypothetical): the detector-pair formula used to
+  also require `sim > 0`, on the theory that `sim=0` always meant "segment
+  not configured yet." But `computeMapeSimulatedTravelTime` also returns
+  `0` for a **fully-configured** segment whose average speed happened to be
+  exactly zero for one interval (real gridlock, or a missing sample) — and
+  in that case the old formula silently reported `0%` error → `'Valid
+  (Excellent)'`, a false positive: a segment where the model produced zero
+  simulated travel time against a real nonzero observed value was reported
+  as a perfect match. The render template's own `${row.sim ? row.err :
+  '—'}` cell-hiding logic (`_renderMapeFromDetectorRaw`'s row rendering)
+  compounded this by hiding the (wrong) number entirely, so the visible
+  symptom was a green "Valid" status sitting next to a dash. Both are now
+  fixed: the formula no longer special-cases `sim=0`, and the display now
+  keys off the row's *configuration* status (`Needs both detectors`/`Needs
+  distance`) rather than off `sim` being falsy, so a genuinely-configured
+  zero-speed row shows its real (now-correct) number instead of a dash.
+  Regression test: `tests/gehMape.test.js`'s "REGRESSION: a fully-configured
+  segment with a genuine zero-speed interval..." case, plus a live-window
+  check confirming the rendered row shows `Invalid` and `100.00%`, not a
+  false `Valid (Excellent)` next to a dash.
+
+  **One residual ambiguity, explicitly not resolved by this fix** (flagged
+  during the original investigation, confirmed still open, and confirmed
+  *not* to be a fork that changes which formula is correct): `sim=0` in the
+  detector-pair path can still mean either "both detectors read genuine 0
+  speed" (real gridlock) or "no detector sample exists for this interval at
+  all" (a data gap) — `computeMapeAvgSpeed` collapses both to the same `0`,
+  and unifying the error formula treats them identically (both now
+  correctly read as a 100% miss against a real observed value, regardless
+  of which of the two actually caused it). Whether a missing sample should
+  instead be excluded from the comparison entirely, rather than compared as
+  if speed were 0, is a separate, deeper question about upstream
+  missing-data handling — orthogonal to the formula fix, and left open.
+  Both `getMapeModelStatus`/`getMapeModelStatusEdgeFormat` (the per-segment
+  success-rate rollups) remain intentionally separate — that divergence is
+  about a different, unrelated quirk (an empty-interval-list/`totalCount=0`
+  guard that only one of the two has), not the `sim=0` case this fix
+  addressed, and was out of scope here.
 - **MAPE simulated travel time** (detector-pair segments): for a segment
   from detector A to detector B with user-entered `distance` (meters),
   `avgSpeed = (speedA + speedB) / 2` (falls back to whichever one is
@@ -295,15 +335,36 @@ wrapping every persist in try/catch.
   `ceil(simDurationMinutes * 60 / binWidthSeconds)`. Bin index for a trip:
   `min(binCount-1, floor(depart / binWidthSeconds))`. Labels are clock times
   anchored to Sim Start Time, computed by `_emissionsBinLabels`.
-- **Dwell Time Analysis regression** (`calculatePolyReg`): fits a quadratic
-  (3 parameters: `y = ax² + bx + c`) across the sweep's data points, one per
-  dwell value. Requires **all 5** of the fixed dwell values (0/10/20/45/90s)
-  before it will report a curve/R² — a quadratic has only 3 parameters, so
-  at exactly n=3 it fits every point perfectly and reports a meaningless
-  R²≈1.0 that's an artefact of zero residual degrees of freedom, not
-  evidence of a real relationship. Below n=5, `updateFormula` shows
-  "Insufficient Data (Need all 5 dwell scenarios)" in place of a number
-  (styled as a caution, via `reg.lowConfidence`) instead of a fabricated fit.
+- **Dwell Time Analysis regression** (`App.calculatePolyReg` →
+  `polyReg.js`'s `calculatePolyReg`): fits a quadratic (3 parameters: `y =
+  ax² + bx + c`) across the sweep's data points, one per dwell value.
+  Requires **all 5** of the fixed dwell values (0/10/20/45/90s) before it
+  will report a curve/R² — a quadratic has only 3 parameters, so at exactly
+  n=3 it fits every point perfectly and reports a meaningless R²≈1.0 that's
+  an artefact of zero residual degrees of freedom, not evidence of a real
+  relationship. Below n=5, `updateFormula` shows "Insufficient Data (Need
+  all 5 dwell scenarios)" in place of a number (styled as a caution, via
+  `reg.lowConfidence`) instead of a fabricated fit.
+  **Domain-plausibility guard**: every quantity this fit is used for (time
+  loss, emissions, fuel, stop counts, speed) is physically non-negative, so
+  a fitted curve dipping below zero *within the sampled/displayed x-range*
+  (checked at both endpoints and at the quadratic's vertex, if the vertex
+  falls inside that range — sufficient since a quadratic's extreme value
+  over an interval only ever occurs at one of those points) is flagged via
+  `impliesNegative`/`warning` fields, surfaced as a visible red caption
+  under the formula (same "don't hide a gap, flag it" pattern as the
+  tripinfo parser's warnings) rather than silently displayed as a normal
+  result. Deliberately does **not** check extrapolation beyond the sampled
+  range (e.g. far past x=90) — only what's actually shown. Unit-tested in
+  `tests/polyReg.test.js`: the n<5 guard (including with null/NaN gaps), a
+  recovered known quadratic (R²=1, no false-positive warning), a noisy
+  realistic fit (no false positive), an all-identical-y-values zero-variance
+  case, a singular-matrix "Linear/Constant" case, and two guard-triggering
+  cases (an exact `y=x²-1000` curve dipping to -1000 at its vertex, and a
+  sharp early-drop dataset) — both confirmed to report the expected warning
+  text and minimum value. Confirmed live in a real Electron window: a
+  constructed dataset that dips to -1000 renders the red warning caption
+  under the Dwell tab's actual formula display, not just in the return value.
 - **Interval aggregation** (`App._aggregateRecordsByInterval` →
   `intervalAggregation.js`'s `aggregateRecordsByInterval`): combines raw
   per-interval SUMO records into coarser buckets when Validation/MAPE's
@@ -318,15 +379,47 @@ wrapping every persist in try/catch.
   empty input, records missing a usable key, exact-duplicate begins,
   boundary-unaligned/overlapping begins, multiple independent keys, and the
   average-of-zero-records guard.
-- **Pedestrian crossing matching** (`_applyParsedPedData`): two independent
-  strategies tried per personFlow — (a) if it has a `<walk edges="...">`
-  child, check whether the crossing's own `edges` (from `.add.xml`) appear
-  as a **contiguous subsequence** within the walk's edge list, forward or
-  reversed (not exact-string equality — real walks include footpath edges
-  before/after the actual crossing); (b) if it has a `<personTrip from= to=>`
-  child instead (no explicit edge list to search), match by an id-naming
+- **Pedestrian crossing matching** (`App._applyParsedPedData` → `pedMatching.js`'s
+  `matchPedFlowToCrossing`): two independent strategies tried per personFlow
+  — (a) if it has a `<walk edges="...">` child, check whether the
+  crossing's own `edges` (from `.add.xml`) appear as a **contiguous
+  subsequence** within the walk's edge list, forward or reversed (not
+  exact-string equality — real walks include footpath edges before/after
+  the actual crossing); (b) if it has a `<personTrip from= to=>` child
+  instead (no explicit edge list to search), match by an id-naming
   convention `^c(\d+)_(in|out)_` where the number is a 0-based crossing
-  index and in/out map to forward/reverse.
+  index and in/out map to forward/reverse. Unit-tested in
+  `tests/pedMatching.test.js`: exact/subsequence/reversed edge matches, no
+  match, a crossing with no configured edges (skipped, not matched),
+  personTrip id matching (including case-insensitivity and an out-of-range
+  index), and a flow with neither an edge list nor a matching id. **A real,
+  previously-undocumented quirk found and confirmed while extracting this**:
+  when matching by edge list, the code checks *every* crossing rather than
+  stopping at the first match, so if a walk's edges contain more than one
+  crossing's edges as a subsequence, the **last** matching crossing wins,
+  not the first — preserved as-is (see `pedMatching.js`'s own comment),
+  not "fixed," since this wasn't reported as a problem and changing match-
+  priority order is a behavior change, not a testability one.
+- **Combined demand XML generation** (`App._buildFullXML` →
+  `xmlBuilderCore.js`'s `buildFullXML`): the literal "builds demand XML"
+  deliverable this app exists for — combines vTypes, vehicle flows (Flows
+  tab), pedestrian crossings (Pedestrians tab, split into 4 timed bursts
+  per interval at `+0/+150/+300/+450s` offsets with any remainder count
+  going to the earliest bursts first), bus-stop-attached flows (a
+  `heavy_bus` flow on the configured bus route gets nested `<stop
+  busStop= duration=>` elements per stop, dwell time looked up from
+  `_busState.dwellData` by `floor(begin / (busDwellIntervalDuration*60))`,
+  defaulting to 10s if that interval has no entry), and parking/idling
+  flows (nested `<stop parkingArea= duration=>`, defaulting to 120s) — all
+  merged and sorted by `begin` time into one document regardless of which
+  category they came from. Previously entirely untested despite being the
+  core deliverable; unit-tested in `tests/xmlBuilderCore.test.js`: empty
+  state, built-in/custom vType inclusion, basic flows, zero/missing counts
+  producing no flow, the bus-stop-attached case (including its 10s default-
+  dwell fallback and the "not on the bus route" plain-flow case), the
+  pedestrian 4-burst split (including the no-configured-edges skip and
+  fwd/rev independence), the parking case (including its 120s default-
+  duration fallback), and the final cross-category sort order.
 
 ## The 9 tabs (UI element IDs worth knowing)
 
@@ -374,12 +467,15 @@ wrapping every persist in try/catch.
    `#file-emissions-scenario-{a..e}` + `#scenario-{a..e}-name`, `#emissions-results`,
    `#fuel-price-diesel`/`#fuel-price-petrol`/`#fuel-price-date`. The 5-slot
    cap is structural (exactly 5 inputs exist), not a validated count.
-9. **Dwell Time Analysis** (`tab-dwell-analysis`) — `#dwell-results`,
-   "Run Dwell Sweep (5 runs, desktop app only)" — runs SUMO once per
-   dwell value in `[0, 10, 20, 45, 90]` seconds, snapshotting/restoring
-   `_busState.dwellData` around each run and writing each run's tripinfo to
-   `dwell_sweep_{dwell}s_tripinfo.xml`. Charts indexed by dwell value, not
-   time-of-day.
+9. **Dwell Time Analysis** (`tab-dwell-analysis`) — `#dwell-results`, 5 file
+   inputs (`#dwell-file-{0,10,20,45,90}`) for manually uploading each
+   dwell-value scenario's own tripinfo output. Charts indexed by dwell
+   value, not time-of-day. `App.runDwellSweep()` (automating all 5 SUMO
+   runs itself — once per dwell value in `[0, 10, 20, 45, 90]` seconds,
+   snapshotting/restoring `_busState.dwellData` around each run) still
+   exists in `app.js` but its only button was removed from `index.html` at
+   the user's request — it's currently **dead/unreachable code**, not
+   deleted outright since removing the method itself wasn't asked for.
 
 Every tab has a "❓ How to use" button (`App.showHelp('<topic>')`) — 9 help
 topics defined in `App._helpContent`, rewritten several times this
@@ -437,21 +533,45 @@ check whether it's a code path this reset doesn't reach yet.
 ## Testing — exactly what's covered, how, and what isn't
 
 **`npm test`** (Node's built-in `node --test`, no dependency added) runs
-46 tests across 4 files, all passing:
+100 tests across 8 files, all passing:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/emissionsParser.test.js` | 12 | Trip counting, fuel-density branch, bin assignment/clamping, missing-emissions warning, **plus malformed-file hardening**: empty file, truncated file, BOM/UTF-16-declared file (parses clean), a record missing both `depart`/`timeLoss` (now counted as skipped), and the confirmed unclosed-`<tripinfo>`-swallows-next-record case (now flagged via tag-count mismatch). |
+| `tests/emissionsParser.test.js` | 15 | Trip counting, fuel-density branch, bin assignment/clamping, missing-emissions warning, **malformed-file hardening**: empty file, truncated file, BOM/UTF-16-declared file (parses clean), a record missing both `depart`/`timeLoss` (now counted as skipped), the confirmed unclosed-`<tripinfo>`-swallows-next-record case (now flagged via tag-count mismatch), a non-UTF-8 file misread as UTF-8 (mojibake, parses clean), mixed Windows/Unix line endings (parses clean), and one pathologically long line with no breaks at all, 20,000 trips, ~70ms (parses clean, no slowdown). None of the encoding/line-ending/long-line cases turned out to be a gap. |
 | `tests/graphDistance.test.js` | 9 | Normal multi-lane chains, same-lane forward/backward, disconnected detectors, unknown lane ids, the 8000m bound (just over and just under), a 25,000-node graph confirming the 20,000-visit cap bounds runtime, custom bound options. |
 | `tests/intervalAggregation.test.js` | 7 | Normal bucketing, empty input, missing keys, exact-duplicate begins, boundary-unaligned/overlapping begins, multiple independent keys, average-of-zero-records guard. |
-| `tests/gehMape.test.js` | 18 | GEH (`M=C=0`, known-value check, perfect match, all 3 status thresholds, all 3 model-status thresholds), MAPE avg-speed/simulated-time, **both** MAPE error/status/model-status implementations (detector-pair and edge format) including their confirmed divergence at `sim=0`. |
+| `tests/gehMape.test.js` | 18 | GEH (`M=C=0`, known-value check, perfect match, all 3 status thresholds, all 3 model-status thresholds), MAPE avg-speed/simulated-time, the unified MAPE error/status formula, and the **regression test for the exact misclassification found and fixed** — a fully-configured segment with a genuine zero-speed interval now correctly reports `Invalid`, not a false `Valid (Excellent)` — plus a test confirming `getMapeStatus` delegates to the same shared threshold logic as `getMapeStatusEdgeFormat` rather than duplicating it. |
+| `tests/polyReg.test.js` | 8 | The n<5 insufficient-data guard (including with null/NaN gaps counted out), a recovered known quadratic (R²=1, no false-positive warning), a realistic noisy fit (no false positive), an all-identical-y zero-variance case, a singular-matrix degenerate case, and **two cases that trigger the new domain-plausibility guard** (an exact `y=x²-1000` curve and a sharp early-drop dataset), confirming the warning text and reported minimum value. |
+| `tests/pedMatching.test.js` | 19 | `containsSeq` (exact, subsequence, non-contiguous, empty/oversized needle), `findNearestIntervalIndex`, and `matchPedFlowToCrossing` for both matching strategies — including the confirmed "last match wins, not first" quirk when a walk's edges overlap more than one crossing. |
+| `tests/reportDataPrep.test.js` | 11 | `fmtNum`'s rounding/formatting rules (including zero-vs-empty, the >=100 magnitude threshold) and `tableFromChart`'s header/row assembly, including missing datasets/labels/dataset-label edge cases. |
+| `tests/xmlBuilderCore.test.js` | 13 | The combined demand-XML generator: empty state, built-in/custom vType inclusion, basic flows, zero/missing counts, the bus-stop-attached-flow case (with its default-dwell fallback and the not-on-the-bus-route plain-flow case), the pedestrian 4-burst split (with the no-edges skip and fwd/rev independence), the parking case (with its default-duration fallback), and cross-category sort order. |
 
-**What this does NOT cover**: `calculatePolyReg` (Dwell regression fit),
-the pedestrian subsequence/id-pattern matching in `_applyParsedPedData`,
-the PDF report generator, and most of the remaining ~5000 lines of `app.js`
-that manipulate the DOM directly rather than computing a value. Extracting
-more of those into pure modules (the pattern used for all four files above)
-is the way to extend coverage further, but wasn't in scope this round.
+**Separately, `npm run test:pdf-smoke`** (NOT part of `node --test` — needs
+a real Electron window; jsPDF/Chart.js/DOM don't exist under plain Node)
+runs 20 checks against `App.generateFullReport` for a minimal (empty) and a
+realistic (populated) project state: confirms it completes without
+throwing (including catching the function's *own* internal try/catch,
+which otherwise swallows errors into a toast — a naive check that only
+looks for a thrown exception would have missed real internal failures),
+produces non-empty PDF output, and that the PDF's own `.text()` calls
+actually included every expected section heading plus (for the realistic
+case) a real data-derived value (a detector id from the constructed GEH
+data). See "Live-GUI verification" below for the discovery journey behind
+its interception technique.
+
+**What this does NOT cover**: the PDF report generator's actual *rendering*
+fidelity (whether the resulting PDF looks right, has correct layout, etc.)
+— the smoke test above confirms it runs and contains the right content,
+not that it renders correctly; a pixel/binary-output comparison was
+deliberately not attempted, as instructed. Also still uncovered: most of
+the remaining ~5000 lines of `app.js` that manipulate the DOM directly
+rather than computing a value (rendering functions, tab-switching, undo/
+redo, localStorage persistence glue), and `_processSimResults`' tripinfo/
+summary-XML aggregation logic (used by the PDF smoke test's realistic case,
+but not unit-tested on its own — it's on the shortlist for a future pass,
+not the largest remaining gap). Extracting more of those into pure modules
+(the pattern used for all eight files above) is the way to extend coverage
+further, but wasn't in scope this round.
 
 **Live-GUI verification (not just `node --test`).** Some restricted/CI-like
 environments force Electron to run as plain Node via `ELECTRON_RUN_AS_NODE=1`,
@@ -501,9 +621,48 @@ confirmed, in a real Chromium renderer:
   real `showToast()` calls through the full `_parseEmissionsAsync` → Worker
   → `_toastEmissionsParseWarnings` path, not just as return values from the
   pure function in isolation.
+- A later pass confirmed the `polyReg.js`/`pedMatching.js`/`reportDataPrep.js`
+  extraction is also wired correctly end-to-end: a real `App.calculatePolyReg`
+  call with a synthetic 5-point quadratic dataset returned the expected
+  `R²=1.0000`; a 3-point call correctly returned the insufficient-data
+  message; a real `App._applyParsedPedData` call with one `<walk edges>`-
+  style flow and one personTrip-id-style flow (`c0_out_600`) populated
+  `_pedState.data` with exactly the expected keys (`0_0_fwd`, `0_1_rev`)
+  and counts; and the global `tableFromChart` function (as `app.js`'s PDF
+  report code calls it) produced the expected headers/rows with `fmtNum`
+  formatting applied.
+- **The MAPE fix was confirmed live, not just via unit test.** A real
+  `App._renderMapeFromDetectorRaw` call with a fully-configured segment
+  (`distance=500`) and both detectors reporting 0 speed for the interval
+  rendered `Invalid` in the status cell and `100.00%` in the error cell —
+  not the old false `Valid (Excellent)` next to a hidden dash.
+- **The `calculatePolyReg` domain-plausibility guard was confirmed live.**
+  A real `App.renderDwellCharts` call with a dataset constructed to dip to
+  -1000 rendered the actual red warning caption under the Dwell tab's
+  formula display element, not just as a return-value field.
+- **The `xmlBuilderCore.js` wiring was confirmed live.** A real
+  `App._buildFullXML()` call (after setting `_flowsState`/`_pedState`/
+  `_busState` to a small synthetic scenario) produced a well-formed XML
+  document containing the expected `<vType>` and `<flow>` elements.
+- **The PDF smoke test's interception technique required a real discovery,
+  not a first-try success — worth documenting since it reveals something
+  about how the vendored jsPDF build works.** Patching `jsPDF.prototype.text`/
+  `.save` (the obvious approach) silently intercepted nothing — 0 calls
+  captured despite the report completing "successfully." Investigating with
+  a call-counting instrument confirmed jsPDF assigns `.text`/`.save` as
+  **own instance properties** (a plugin/API pattern), not shared prototype
+  methods, so patching the prototype has no effect on real instances. The
+  working fix wraps the `jsPDF` **constructor** itself, so each real
+  instance's own methods get wrapped immediately after construction, before
+  `app.js` ever touches them — confirmed via the same instrumentation
+  (23 `.text()` calls, 1 `.save()` call captured) before being written into
+  the permanent test.
 
 All scratch test harnesses used for the above were temporary (built in a
 throwaway subfolder, deleted after use) — they are not part of the repo.
+`tests/pdfSmoke/index.js` is the one exception: a **permanent** Electron-
+based test (not throwaway), since the task asked for a repeatable smoke
+test, not just a one-off manual verification.
 
 ## Known issues / fragile parts
 
@@ -524,13 +683,12 @@ throwaway subfolder, deleted after use) — they are not part of the repo.
   whether the category name matches bus/truck/van (0.832 kg/L) vs
   everything else (0.745 kg/L) — a custom vType added via the dynamic
   Vehicle Params system has no way to declare its own fuel density.
-- **The two MAPE renderers genuinely disagree at `sim=0`** (see Formulas
-  section) — the detector-pair path treats an unconfigured/not-yet-simulated
-  segment as "not yet comparable" (0% error), the edge-format path treats
-  it as a literal 100% miss. Confirmed while extracting both into
-  `gehMape.js`, left as-is per "don't touch calculation logic" — worth
-  knowing if the two tabs ever seem to disagree on a segment that should be
-  equivalent.
+- **~~The two MAPE renderers disagreed at `sim=0`~~ — fixed.** See the MAPE
+  % error note in the Formulas section for the full writeup of what
+  diverged, the concrete misclassification it caused, and how it was fixed
+  (unified onto the standard MAPE formula, plus a display fix). One
+  residual ambiguity remains open by design (not a fork in which formula is
+  correct) — see that same section.
 - **A `<tripinfo>` missing its own closing tag silently merges with the
   next record** (see Formulas section) — a confirmed, pre-existing regex-
   matching behavior, now at least detected and surfaced as a warning
@@ -591,6 +749,59 @@ to `emissionsParser.js` (`skippedRecords`/`openTagCount`/`tagCountMismatch`/
 that an unclosed `<tripinfo>` tag causes the parser to silently swallow the
 next record; that regex-matching quirk itself was left untouched, only
 detection was added.
+
+A third pass extended the same extraction pattern to the three remaining
+named test-coverage gaps: `polyReg.js` (Dwell regression fit),
+`pedMatching.js` (pedestrian crossing matching — the DOM/state side effects
+stayed in `app.js`, only the matching decision moved out), and
+`reportDataPrep.js` (the PDF report's `fmtNum`/`tableFromChart` data-shaping
+helpers; the PDF rendering step itself was deliberately not unit-tested at
+that point, since a binary/pixel-output comparison would be brittle for
+little value — a non-pixel smoke test was added in the next pass instead).
+This pass also investigated — but did not yet change — the MAPE `sim=0`
+divergence found earlier: the edge-format formula matches the standard
+MAPE definition, and the detector-pair path's deviation was traced to a
+real, previously-unnoticed consequence (a fully-configured segment with a
+genuine zero-speed interval reads as a false "Valid (Excellent)" today,
+not just "differs in theory"). A fix was proposed (unify onto the edge-
+format formula) but intentionally left unimplemented pending a decision,
+since it's a real behavior change, not a testability refactor. Finally,
+three more deliberately-malformed tripinfo cases were tested against the
+existing parser (a non-UTF-8 encoding misread as UTF-8, mixed Windows/Unix
+line endings, and one 4.4-million-character line with no breaks at all) —
+none of the three turned out to be a gap; all three parse cleanly and
+quickly, and are now permanent regression tests rather than one-off checks.
+
+A fourth, final pre-submission pass acted on the previous round's proposal
+and closed the remaining named gaps. The MAPE divergence's "residual
+ambiguity" (whether `sim=0` means genuine gridlock or a missing sample) was
+first assessed and confirmed to be a separate, orthogonal question — not a
+fork that changes which error formula is correct — so the fix proceeded:
+both MAPE call sites now share one formula (`calculateMapeError`, the
+standard-MAPE one), `getMapeStatus` delegates its threshold classification
+to the same shared function, and the render template's cell-hiding logic
+was corrected to key off configuration status rather than `sim` being
+falsy — the exact regression case (a fully-configured, genuine-zero-speed
+segment) is now unit-tested and was confirmed live to render `Invalid`/
+`100.00%` instead of a false `Valid (Excellent)`/dash. `calculatePolyReg`
+gained a domain-plausibility guard: a fitted curve dipping negative within
+the sampled range (checked at both endpoints and the vertex, if it falls
+inside that range) now surfaces a visible warning instead of silently
+displaying an impossible number, following the same pattern as the
+tripinfo parser's warnings. A permanent (not throwaway) PDF-generation
+smoke test was added (`tests/pdfSmoke/`, run via `npm run test:pdf-smoke`)
+confirming `generateFullReport` completes and produces the expected section
+headings for both an empty and a populated project state — building it
+surfaced a real technical wrinkle worth remembering: the vendored jsPDF
+build assigns `.text`/`.save` as own-instance properties, not shared
+prototype methods, so the obvious prototype-patching interception silently
+captured nothing until the constructor itself was wrapped instead. Finally,
+`xmlBuilderCore.js` was extracted from `xmlBuilder.js`'s `App._buildFullXML`
+— the literal "builds demand XML" deliverable this app exists for, and the
+largest remaining untested piece of pure logic in the codebase — covering
+vType assembly, vehicle flows, the bus-stop-dwell-attachment special case,
+the pedestrian 4-burst-split logic, parking flows, and final cross-category
+sort ordering.
 
 ## Running it
 

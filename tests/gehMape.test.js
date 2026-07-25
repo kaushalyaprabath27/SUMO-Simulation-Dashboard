@@ -6,7 +6,7 @@ const {
     calculateGEH, getGEHStatus, getGEHModelStatus,
     computeMapeAvgSpeed, computeMapeSimulatedTravelTime, calculateMapeError,
     getMapeStatus, getMapeModelStatus,
-    calculateMapeErrorEdgeFormat, getMapeStatusEdgeFormat, getMapeModelStatusEdgeFormat
+    getMapeStatusEdgeFormat, getMapeModelStatusEdgeFormat
 } = require('../gehMape.js');
 
 test('GEH: M = C = 0 returns 0, not NaN (division-by-zero guard)', () => {
@@ -54,18 +54,20 @@ test('MAPE: simulated travel time requires both detectors, a real distance, and 
     assert.equal(computeMapeSimulatedTravelTime(true, 500, 0), 0);   // missing speed
 });
 
-test('MAPE error (detector-pair format): zero observed value returns 0, not Infinity/NaN', () => {
+test('MAPE error: zero observed value returns 0, not Infinity/NaN', () => {
     assert.equal(calculateMapeError(50, 0), 0);
 });
 
-test('MAPE error (detector-pair format): zero simulated value ALSO returns 0 (sim>0 guard)', () => {
-    // This is the detector-pair path's specific behavior: an unconfigured/
-    // not-yet-simulated segment (sim=0) reads as "not yet comparable", not
-    // as a 100% miss — distinct from the edge-format path below.
-    assert.equal(calculateMapeError(0, 50), 0);
+test('MAPE error: zero simulated value with a real observed value IS a 100% error (standard MAPE — unified, no sim>0 guard)', () => {
+    // Previously this returned 0 ("not yet comparable") for the
+    // detector-pair path specifically, diverging from the edge-format path.
+    // Unified onto the standard MAPE definition after an investigation
+    // found the old guard could misclassify a fully-configured segment
+    // with a genuine zero-speed interval as a false "Valid (Excellent)".
+    assert.equal(calculateMapeError(0, 50), 100);
 });
 
-test('MAPE error (detector-pair format): known case matches |sim-obs|/obs*100', () => {
+test('MAPE error: known case matches |sim-obs|/obs*100', () => {
     assert.equal(calculateMapeError(110, 100), 10);
 });
 
@@ -77,6 +79,29 @@ test('MAPE status (detector-pair format): configuration states take priority ove
     assert.equal(getMapeStatus(true, 500, 15.01), 'Invalid');
 });
 
+test('REGRESSION: a fully-configured segment with a genuine zero-speed interval now correctly reports Invalid, not a false Valid (Excellent)', () => {
+    // This is the exact scenario the earlier investigation found: hasBoth
+    // and distance are both satisfied (segment IS fully configured), but
+    // the average speed for this interval was genuinely 0 (e.g. both
+    // detectors reporting real gridlock), so computeMapeSimulatedTravelTime
+    // returns sim=0 — previously misread as "not yet comparable" (0% error,
+    // status 'Valid (Excellent)') even though a real observed travel time
+    // existed. It should now read as a real 100% miss.
+    const hasBoth = true;
+    const distance = 500; // fully configured — a real distance is entered
+    const avgSpeed = 0;   // genuine zero-speed interval, not "missing data"
+    const sim = computeMapeSimulatedTravelTime(hasBoth, distance, avgSpeed);
+    assert.equal(sim, 0);
+
+    const obs = 45; // a real observed travel time exists for this interval
+    const errPct = calculateMapeError(sim, obs);
+    assert.equal(errPct, 100);
+
+    const status = getMapeStatus(hasBoth, distance, errPct);
+    assert.equal(status, 'Invalid');
+    assert.notEqual(status, 'Valid (Excellent)');
+});
+
 test('MAPE model status (detector-pair format): no rows reports "No data in this window"', () => {
     assert.equal(getMapeModelStatus(0, 0), 'No data in this window');
 });
@@ -86,12 +111,10 @@ test('MAPE model status (detector-pair format): >=75% success rate is Success, e
     assert.equal(getMapeModelStatus(2, 4), 'Needs Calibration'); // 50%
 });
 
-test('MAPE error (edge format): zero observed value returns 0', () => {
-    assert.equal(calculateMapeErrorEdgeFormat(50, 0), 0);
-});
-
-test('MAPE error (edge format): zero simulated value with a real observed value IS a 100% error (no sim>0 guard, unlike detector-pair format)', () => {
-    assert.equal(calculateMapeErrorEdgeFormat(0, 50), 100);
+test('MAPE status: once a segment is configured, getMapeStatus delegates to the same threshold logic as getMapeStatusEdgeFormat (shared, not duplicated)', () => {
+    for (const errPct of [0, 5, 10, 10.01, 15, 15.01, 100]) {
+        assert.equal(getMapeStatus(true, 500, errPct), getMapeStatusEdgeFormat(errPct));
+    }
 });
 
 test('MAPE status (edge format): same 10/15% thresholds, no configuration states', () => {

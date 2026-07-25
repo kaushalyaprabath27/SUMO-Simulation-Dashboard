@@ -147,3 +147,58 @@ test('self-closing <tripinfo .../> records (no separate closing tag needed) are 
     assert.equal(result.tripCount, 2);
     assert.equal(result.tagCountMismatch, false);
 });
+
+// ---------------------------------------------------------------------
+// Additional malformed-file cases (broadening beyond the 7 above): a
+// non-UTF-8 source misread as UTF-8, mixed Windows/Unix line endings, and
+// one pathologically long line. None of these turned out to be a gap —
+// documented here as passing regression tests, not bug reports.
+// ---------------------------------------------------------------------
+
+test('malformed file: bytes from a non-UTF-8 encoding (misread as UTF-8, producing mojibake) do not disrupt tag matching', () => {
+    // Simulates what happens if a file wasn't actually UTF-8 (e.g. saved as
+    // Windows-1252/Latin-1 with an accented comment) and got decoded as UTF-8
+    // anyway, the way FileReader.readAsText() would with no encoding hint.
+    // The mojibake lands inside an XML comment, well away from any
+    // <tripinfo>/<emissions> tag or attribute — which are pure ASCII by
+    // construction in SUMO's own output — so it has no effect on parsing.
+    const latin1Bytes = Buffer.from('<!-- Café, région, note dépôt -->', 'latin1');
+    const mojibakeComment = latin1Bytes.toString('utf8');
+    const xml = `<?xml version="1.0"?><tripinfos>${mojibakeComment}<tripinfo id="v0" depart="0.00" vType="bus" timeLoss="1.00" waitingCount="0" routeLength="10.00" duration="5.00"><emissions CO_abs="1" CO2_abs="1000" HC_abs="1" PMx_abs="1" NOx_abs="1" fuel_abs="800000"/></tripinfo></tripinfos>`;
+    const result = parseEmissionsRegexPure(xml, 600, 10);
+    assert.equal(result.tripCount, 1);
+    assert.equal(result.foundAnyEmissions, true);
+    assert.deepEqual(result.warnings, []);
+});
+
+test('malformed file: mixed Windows (\\r\\n) and Unix (\\n) line endings within the same file parse identically to a clean file', () => {
+    const xml = '<?xml version="1.0"?>\r\n<tripinfos>\n' +
+        '<tripinfo id="v0" depart="0.00" vType="bus" timeLoss="1.00" waitingCount="0" routeLength="10.00" duration="5.00">\r\n' +
+        '<emissions CO_abs="1" CO2_abs="1000" HC_abs="1" PMx_abs="1" NOx_abs="1" fuel_abs="800000"/>\n</tripinfo>\r\n' +
+        '<tripinfo id="v1" depart="600.00" vType="bus" timeLoss="2.00" waitingCount="0" routeLength="20.00" duration="10.00">\n' +
+        '<emissions CO_abs="2" CO2_abs="2000" HC_abs="2" PMx_abs="2" NOx_abs="2" fuel_abs="700000"/>\r\n</tripinfo>\n</tripinfos>';
+    const result = parseEmissionsRegexPure(xml, 600, 10);
+    assert.equal(result.tripCount, 2);
+    assert.equal(result.foundAnyEmissions, true);
+    assert.equal(result.netTotals.CO2, 0.003); // (1000+2000)mg / 1e6
+    assert.deepEqual(result.warnings, []);
+});
+
+test('malformed file: one pathologically long line with no line breaks at all parses correctly and stays fast', () => {
+    let xml = '<?xml version="1.0"?><tripinfos>';
+    const N = 20000;
+    for (let i = 0; i < N; i++) {
+        xml += `<tripinfo id="v${i}" depart="${i % 5000}.00" vType="bus" timeLoss="1.00" waitingCount="0" routeLength="10.00" duration="5.00"><emissions CO_abs="1" CO2_abs="1000" HC_abs="1" PMx_abs="1" NOx_abs="1" fuel_abs="800000"/></tripinfo>`;
+    }
+    xml += '</tripinfos>';
+    assert.equal(xml.includes('\n'), false); // confirm the test actually constructed one unbroken line
+
+    const start = Date.now();
+    const result = parseEmissionsRegexPure(xml, 600, 10);
+    const elapsedMs = Date.now() - start;
+
+    assert.equal(result.tripCount, N);
+    assert.equal(result.foundAnyEmissions, true);
+    assert.deepEqual(result.warnings, []);
+    assert.ok(elapsedMs < 5000, `expected no pathological slowdown on a single long line, took ${elapsedMs}ms`);
+});

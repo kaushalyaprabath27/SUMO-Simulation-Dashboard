@@ -39,21 +39,37 @@ function computeMapeSimulatedTravelTime(hasBoth, distance, avgSpeed) {
     return (hasBoth && distance > 0 && avgSpeed > 0) ? Math.round(distance / avgSpeed) : 0;
 }
 
-// MAPE % error = |sim-obs| / obs * 100. Zero if either side is zero/missing
-// (matches the original: a 0 observed or 0 simulated value can't produce a
-// meaningful percentage, so it's treated as "not yet comparable" rather than
-// Infinity or NaN).
+// MAPE % error = |sim-obs| / obs * 100 — the standard MAPE definition,
+// undefined only when the observed (actual) value is zero. A zero
+// simulated value is a normal data point meaning a 100% miss, not a
+// special case. This was previously two diverging implementations (one of
+// which also required sim>0, silently reporting 0% — "not yet comparable"
+// — instead of a real 100% miss); unified onto this one after an
+// investigation found the sim>0 guard could misclassify a fully-configured
+// segment with a genuine zero-speed interval as a false "Valid (Excellent)"
+// instead of correctly flagging it. See tests/gehMape.test.js for the
+// specific regression case.
 function calculateMapeError(sim, obs) {
-    return (obs > 0 && sim > 0) ? Math.abs(sim - obs) / obs * 100 : 0;
+    return obs > 0 ? Math.abs(sim - obs) / obs * 100 : 0;
 }
 
-// <=10% Valid (Excellent), <=15% Marginal (Acceptable), >15% Invalid — but
-// only once the segment actually has both detectors and a real distance;
-// otherwise it's still being configured, not failing calibration.
+// <=10% Valid (Excellent), <=15% Marginal (Acceptable), >15% Invalid.
+// Shared by both call sites (detector-pair segments and raw edge/meandata)
+// — the underlying threshold logic was always identical between the two;
+// only the detector-pair path has extra pre-configuration states layered
+// on top (see getMapeStatus below).
+function getMapeStatusEdgeFormat(errPct) {
+    return errPct <= 10 ? 'Valid (Excellent)' : errPct <= 15 ? 'Marginal (Acceptable)' : 'Invalid';
+}
+
+// Detector-pair segments have two configuration states edge/meandata
+// doesn't (no second detector yet, no distance entered) — those are
+// checked first since they mean "not configured," not "failing
+// calibration." Once configured, uses the same thresholds as edge format.
 function getMapeStatus(hasBoth, distance, errPct) {
     if (!hasBoth) return 'Needs both detectors';
     if (distance <= 0) return 'Needs distance';
-    return errPct <= 10 ? 'Valid (Excellent)' : errPct <= 15 ? 'Marginal (Acceptable)' : 'Invalid';
+    return getMapeStatusEdgeFormat(errPct);
 }
 
 // Per-segment rollup. Note this replicates the original's exact rounding
@@ -66,25 +82,13 @@ function getMapeModelStatus(validCount, totalCount) {
     return parseFloat(successRate) >= 75 ? 'Success (Valid)' : 'Needs Calibration';
 }
 
-// ---------------------------------------------------------------------
-// Edge/meandata-format MAPE (App._renderMapeFromRaw) — a SEPARATE, pre-
-// existing implementation from the detector-pair one above, extracted
-// as-is rather than unified with it, because the two genuinely differ:
-// this one has no `sim > 0` guard, so a segment that hasn't produced any
-// simulated travel time yet (sim=0) with a real observed value reads as a
-// literal 100% error instead of "not yet comparable." Also has no
-// "No data in this window" / NaN guard on an empty interval list. Both
-// discrepancies predate this extraction — noted, not changed, since the
-// task here is testability, not reconciling two independent code paths.
-// ---------------------------------------------------------------------
-function calculateMapeErrorEdgeFormat(sim, obs) {
-    return obs > 0 ? Math.abs(sim - obs) / obs * 100 : 0;
-}
-
-function getMapeStatusEdgeFormat(errPct) {
-    return errPct <= 10 ? 'Valid (Excellent)' : errPct <= 15 ? 'Marginal (Acceptable)' : 'Invalid';
-}
-
+// Edge/meandata-format model-status rollup (App._renderMapeFromRaw). Still
+// kept separate from getMapeModelStatus above — this one has no
+// "No data in this window" guard on an empty interval list (a pre-existing,
+// different quirk from the sim=0 divergence that was unified above; with
+// totalCount=0 it silently produces "NaN%" -> NaN>=75 is false -> falls
+// through to 'Needs Calibration'). Not touched here — out of scope for the
+// MAPE-formula unification, which was specifically about the sim=0 case.
 function getMapeModelStatusEdgeFormat(validCount, totalCount) {
     const successRate = ((validCount / totalCount) * 100).toFixed(2) + '%';
     return parseFloat(successRate) >= 75 ? 'Success (Valid)' : 'Needs Calibration';
@@ -95,6 +99,6 @@ if (typeof module !== 'undefined' && module.exports) {
         calculateGEH, getGEHStatus, getGEHModelStatus,
         computeMapeAvgSpeed, computeMapeSimulatedTravelTime, calculateMapeError,
         getMapeStatus, getMapeModelStatus,
-        calculateMapeErrorEdgeFormat, getMapeStatusEdgeFormat, getMapeModelStatusEdgeFormat
+        getMapeStatusEdgeFormat, getMapeModelStatusEdgeFormat
     };
 }

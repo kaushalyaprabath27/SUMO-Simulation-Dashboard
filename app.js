@@ -253,19 +253,9 @@ const App = {
                 rows.forEach(r => drawRow(r, false));
                 y += 4;
             };
-            const fmtNum = (v) => {
-                if (v === null || v === undefined || v === '') return '—';
-                const n = Number(v);
-                if (isNaN(n)) return String(v);
-                return Math.abs(n) >= 100 ? Math.round(n).toString() : (Math.round(n * 100) / 100).toString();
-            };
-            const tableFromChart = (chart) => {
-                const labels = chart.data.labels || [];
-                const datasets = chart.data.datasets || [];
-                const headers = [''].concat(datasets.map(ds => ds.label || ''));
-                const rows = labels.map((lbl, i) => [lbl].concat(datasets.map(ds => fmtNum(ds.data[i]))));
-                return { headers, rows };
-            };
+            // fmtNum/tableFromChart live in reportDataPrep.js (unit-tested in
+            // tests/reportDataPrep.test.js) so the exact same code can run
+            // in isolation under Node.
             const addChartSection = (spec) => {
                 const chart = spec.get();
                 addChartTitle(spec.title);
@@ -1523,14 +1513,10 @@ const App = {
         const begins = Array.from(beginSet).sort((a, b) => a - b);
         if (!begins.length) return;
 
-        const findInterval = (begin) => {
-            let best = -1, bestDiff = Infinity;
-            begins.forEach((b, i) => {
-                const diff = Math.abs(b - begin);
-                if (diff < bestDiff) { bestDiff = diff; best = i; }
-            });
-            return best;
-        };
+        // Nearest-interval and crossing-matching logic live in
+        // pedMatching.js (unit-tested in tests/pedMatching.test.js) so the
+        // exact same code can run in isolation under Node.
+        const findInterval = (begin) => findNearestIntervalIndex(begin, begins);
 
         const first = pedFlows[0];
         const durationMin = Math.max(1, Math.round((first.end - first.begin) / 60));
@@ -1540,37 +1526,12 @@ const App = {
         if (countEl) countEl.value = begins.length;
         if (durEl) durEl.value = durationMin;
 
-        // A walk's edge list is rarely IDENTICAL to a crossing's `edges` — it
-        // usually also includes footpath edges leading up to and away from the
-        // crossing. So look for the crossing's edges as a contiguous run inside
-        // the walk instead of requiring the whole walk to match exactly.
-        const containsSeq = (haystack, needle) => {
-            if (!needle.length || needle.length > haystack.length) return false;
-            for (let i = 0; i <= haystack.length - needle.length; i++) {
-                let match = true;
-                for (let j = 0; j < needle.length; j++) {
-                    if (haystack[i + j] !== needle[j]) { match = false; break; }
-                }
-                if (match) return true;
-            }
-            return false;
-        };
-
-        // <personTrip from=".." to=".."/> personFlows carry no edge list at all
-        // (SUMO computes the path itself) — those are matched instead by the
-        // personFlow's own id, following this project's "c{crossingIndex}_
-        // {in|out}_{beginSec}" convention (0-based index, e.g. c0 = "Crossing 1"
-        // as displayed). "in" is treated as the forward direction, "out" as
-        // reverse — swap them in the table afterward if that's backwards for
-        // your survey convention.
-        const idPattern = /^c(\d+)_(in|out)_/i;
-
         // Grow the crossing list first if any personFlow references an index
         // beyond what's currently configured, so that data is never silently
         // dropped just because "Number of crossings" was set too low.
         let maxIdIndex = -1;
         pedFlows.forEach(f => {
-            const m = (f.id || '').match(idPattern);
+            const m = (f.id || '').match(ID_PATTERN);
             if (m) maxIdIndex = Math.max(maxIdIndex, parseInt(m[1], 10));
         });
         if (maxIdIndex >= this._pedState.crossings.length) {
@@ -1583,24 +1544,11 @@ const App = {
         let applied = 0;
 
         pedFlows.forEach(f => {
-            let ci = -1, dir = 'fwd';
-
-            if (f.edgesStr) {
-                const edgesArr = f.edgesStr.split(/\s+/).filter(Boolean);
-                crossings.forEach((c, idx) => {
-                    const cEdgesStr = (this.project.crossingEdges && this.project.crossingEdges[c.id] || '').trim();
-                    if (!cEdgesStr) return;
-                    const cEdgesArr = cEdgesStr.split(/\s+/).filter(Boolean);
-                    if (containsSeq(edgesArr, cEdgesArr)) { ci = idx; dir = 'fwd'; }
-                    else if (containsSeq(edgesArr, cEdgesArr.slice().reverse())) { ci = idx; dir = 'rev'; }
-                });
-            } else {
-                const m = (f.id || '').match(idPattern);
-                if (m) {
-                    const idx = parseInt(m[1], 10);
-                    if (idx < crossings.length) { ci = idx; dir = m[2].toLowerCase() === 'out' ? 'rev' : 'fwd'; }
-                }
-            }
+            // Which crossing/direction this personFlow belongs to (via a
+            // <walk edges="..."> subsequence match or a personTrip id-naming
+            // convention) is decided by pedMatching.js's
+            // matchPedFlowToCrossing() — unit-tested in tests/pedMatching.test.js.
+            const { crossingIndex: ci, direction: dir } = matchPedFlowToCrossing(f, crossings, this.project.crossingEdges);
 
             if (ci < 0) return;
             const ii = findInterval(f.begin);
@@ -2251,7 +2199,8 @@ const App = {
             }
         }
 
-        // Also load dark mode
+        // Also load dark mode — defaults to light on first run (no stored
+        // preference yet); an explicit past choice (either way) is respected.
         if (localStorage.getItem('sumoDarkMode') === 'true') {
             this.setDarkMode(true);
         } else {
@@ -3736,7 +3685,7 @@ const App = {
                 // Edge-format MAPE formulas live in gehMape.js (unit-tested in
                 // tests/gehMape.test.js, kept distinct from the detector-pair
                 // path's — see that file's comment for why).
-                const errPct = calculateMapeErrorEdgeFormat(sim, obs);
+                const errPct = calculateMapeError(sim, obs);
                 const status = getMapeStatusEdgeFormat(errPct);
                 if (status !== 'Invalid') validCount++;
                 return { index: i, clock: clockFor(beginSec), obs, sim, err: errPct.toFixed(2) + '%', status };
@@ -3910,11 +3859,18 @@ const App = {
             rows.forEach(row => {
                 const sl = row.status.toLowerCase();
                 const rc = sl.includes('excellent') ? '#22c55e' : sl.includes('marginal') ? '#f59e0b' : (sl.includes('needs')) ? '#9ca3af' : '#ef4444';
+                // % Error is only meaningless while the segment isn't fully
+                // configured yet ("Needs both detectors"/"Needs distance") —
+                // once configured, show the real number even when it's 0
+                // (previously this hid the error whenever sim happened to be
+                // 0, which also hid a genuine 100% miss on a fully-configured
+                // zero-speed interval; see gehMape.js's calculateMapeError).
+                const notConfigured = row.status === 'Needs both detectors' || row.status === 'Needs distance';
                 card += `<tr>
                     <td style="white-space:nowrap">${row.clock}</td>
                     <td style="text-align:center;"><input type="number" min="0" value="${row.obs}" onchange="App.updateObservedMAPE('${seg.id}', ${row.index}, this.value)" style="width:56px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:3px;"></td>
-                    <td style="text-align:center;font-weight:bold">${row.sim || '—'}</td>
-                    <td style="text-align:center;font-weight:bold;color:${rc}">${row.sim ? row.err : '—'}</td>
+                    <td style="text-align:center;font-weight:bold">${notConfigured ? '—' : row.sim}</td>
+                    <td style="text-align:center;font-weight:bold;color:${rc}">${notConfigured ? '—' : row.err}</td>
                     <td style="font-size:0.72rem;color:${rc}">${row.status}</td>
                 </tr>`;
             });
@@ -4407,90 +4363,10 @@ const App = {
         }
     },
 
-                calculatePolyReg(xData, yData) {
-        let x = [];
-        let y = [];
-        for (let i = 0; i < xData.length; i++) {
-            if (xData[i] !== null && yData[i] !== null && !isNaN(xData[i]) && !isNaN(yData[i])) {
-                x.push(xData[i]);
-                y.push(yData[i]);
-            }
-        }
-        
-        let n = x.length;
-        // A quadratic fit has 3 parameters, so n=3 fits every point exactly
-        // and reports a meaningless R² of ~1.0 — that's not evidence of a
-        // real relationship, just an artefact of having no residual degrees
-        // of freedom. The Dwell sweep always produces exactly 5 points
-        // (0/10/20/45/90s), so require all 5 before trusting the curve.
-        if (n < 5) return { eq: "y = Insufficient Data (Need all 5 dwell scenarios)", r2: "N/A", lowConfidence: true };
-
-        let sumX = 0, sumX2 = 0, sumX3 = 0, sumX4 = 0;
-        let sumY = 0, sumXY = 0, sumX2Y = 0;
-        
-        for (let i = 0; i < n; i++) {
-            let xi = x[i];
-            let yi = y[i];
-            sumX += xi;
-            sumX2 += xi * xi;
-            sumX3 += xi * xi * xi;
-            sumX4 += xi * xi * xi * xi;
-            sumY += yi;
-            sumXY += xi * yi;
-            sumX2Y += xi * xi * yi;
-        }
-        
-        let m = [
-            [sumX4, sumX3, sumX2, sumX2Y],
-            [sumX3, sumX2, sumX, sumXY],
-            [sumX2, sumX, n, sumY]
-        ];
-        
-        for (let i = 0; i < 3; i++) {
-            let maxEl = Math.abs(m[i][i]), maxRow = i;
-            for (let k = i + 1; k < 3; k++) {
-                if (Math.abs(m[k][i]) > maxEl) {
-                    maxEl = Math.abs(m[k][i]);
-                    maxRow = k;
-                }
-            }
-            let tmp = m[maxRow];
-            m[maxRow] = m[i];
-            m[i] = tmp;
-            if (m[i][i] === 0) return { eq: "y = Linear/Constant", r2: "N/A" };
-            for (let k = i + 1; k < 3; k++) {
-                let c = -m[k][i] / m[i][i];
-                for (let j = i; j < 4; j++) {
-                    if (i === j) m[k][j] = 0;
-                    else m[k][j] += c * m[i][j];
-                }
-            }
-        }
-        
-        let ans = [0, 0, 0];
-        for (let i = 2; i >= 0; i--) {
-            ans[i] = m[i][3] / m[i][i];
-            for (let k = i - 1; k >= 0; k--) {
-                m[k][3] -= m[k][i] * ans[i];
-            }
-        }
-        
-        let a = ans[0], b = ans[1], c = ans[2];
-        
-        let yMean = sumY / n;
-        let ssTot = 0, ssRes = 0;
-        for (let i = 0; i < n; i++) {
-            let yPred = a * x[i] * x[i] + b * x[i] + c;
-            ssTot += (y[i] - yMean) * (y[i] - yMean);
-            ssRes += (y[i] - yPred) * (y[i] - yPred);
-        }
-        let r2 = 1 - (ssRes / (ssTot || 1));
-        
-        return {
-            eq: `y = ${a.toFixed(2)}x² ${b>=0?'+':''} ${b.toFixed(2)}x ${c>=0?'+':''} ${c.toFixed(2)}`,
-            r2: r2.toFixed(4),
-            lowConfidence: false
-        };
+    // Delegates to polyReg.js's calculatePolyReg(), extracted verbatim so
+    // it's unit-testable under Node (tests/polyReg.test.js).
+    calculatePolyReg(xData, yData) {
+        return calculatePolyReg(xData, yData);
     },
 
     renderDwellCharts(data) {
@@ -4553,6 +4429,12 @@ const App = {
             const reg = this.calculatePolyReg(xData, yData);
             if (reg.lowConfidence) {
                 el.innerHTML = '<i style="color:#b45309;">' + reg.eq + '</i>';
+            } else if (reg.impliesNegative) {
+                // Surfaced visibly rather than silently showing a curve
+                // that predicts an impossible negative value — same
+                // "don't hide a gap, flag it" pattern as the tripinfo
+                // parser's skippedRecords/tagCountMismatch warnings.
+                el.innerHTML = '<i style="color:#b91c1c;">' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i><br><i style="color:#b91c1c;font-size:0.82em;">⚠ ' + reg.warning + '</i>';
             } else {
                 el.innerHTML = '<i>' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i>';
             }

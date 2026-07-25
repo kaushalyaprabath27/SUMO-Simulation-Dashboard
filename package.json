@@ -1,12 +1,13 @@
 {
   "name": "sumo-simulation-dashboard",
-  "version": "1.0.31",
+  "version": "1.0.35",
   "description": "Desktop dashboard for building SUMO traffic simulation demand files and analyzing simulation output.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:pdf-smoke": "electron tests/pdfSmoke"
   },
   "author": "W.P.K. Warnasuriya, T.M. Rengarasu, R. Saahith Ahamed",
   "license": "MIT",
@@ -25,11 +26,15 @@
       "data.js",
       "detector.js",
       "xmlBuilder.js",
+      "xmlBuilderCore.js",
       "emissionsParser.js",
       "emissionsWorker.js",
       "graphDistance.js",
       "intervalAggregation.js",
       "gehMape.js",
+      "polyReg.js",
+      "pedMatching.js",
+      "reportDataPrep.js",
       "styles.css",
       "main.js",
       "preload.js",
