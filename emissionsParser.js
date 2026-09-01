@@ -380,8 +380,98 @@ function parseEmissionsXML(xmlText, binDurSec, binCount) {
     };
 }
 
+// ---------------------------------------------------------------------
+// Idle/moving emissions split.
+// ---------------------------------------------------------------------
+//
+// parseEmissionsXML() above reads tripinfo output: one <emissions> total per
+// vehicle for its whole trip. That total has no per-timestep speed, so it
+// cannot be split into "emitted while idling" vs "emitted while moving" —
+// the two quantities are conflated in that file by construction, not by a
+// limitation of this parser. A genuine split needs SUMO's separate
+// --emission-output file (a different file, a different schema: one
+// <vehicle> row per vehicle per simulation step, nested inside <timestep>
+// elements, each row carrying that vehicle's speed at that instant and its
+// emission rate for that instant). See README.md for the exact SUMO
+// invocation that produces it.
+//
+// SUMO reports each <vehicle> row's CO2/CO/HC/NOx/PMx/fuel as an emission
+// RATE (mg/s or ml/s), not a mass — parseEmissionSplitXML() multiplies each
+// row by the simulation's actual step length (inferred from the gap between
+// the first two <timestep time="..."> values in the file, not assumed to be
+// SUMO's 1-second default) to get the mass emitted during that specific
+// step, before adding it to the "idle" or "moving" total for that row's
+// pollutant, based on whether that row's own speed is below the configured
+// threshold.
+function parseEmissionSplitXML(xmlText, idleThresholdMps) {
+    const threshold = (typeof idleThresholdMps === 'number' && idleThresholdMps >= 0) ? idleThresholdMps : 0.1;
+
+    const { root, parserWarnings } = parseXMLDocument(xmlText);
+    const timestepNodes = collectByName(root, ['timestep'], []);
+
+    const zero = () => ({ CO: 0, CO2: 0, HC: 0, PMx: 0, NOx: 0, fuelLiters: 0 });
+    const idle = zero();
+    const moving = zero();
+    let idleVehicleSteps = 0;
+    let movingVehicleSteps = 0;
+    let vehicleStepCount = 0;
+
+    // Step length: inferred once from the first two distinct <timestep>
+    // times seen, not assumed. Falls back to SUMO's own default (1.0s) only
+    // if the file has fewer than two timesteps to infer it from.
+    let stepLengthSec = null;
+    let firstTime = null;
+    for (const ts of timestepNodes) {
+        const t = parseFloat(getAttrCI(ts.attrs, 'time'));
+        if (!isFinite(t)) continue;
+        if (firstTime === null) { firstTime = t; continue; }
+        if (t !== firstTime) { stepLengthSec = Math.abs(t - firstTime); break; }
+    }
+    if (stepLengthSec === null || stepLengthSec <= 0) stepLengthSec = 1.0;
+
+    timestepNodes.forEach(tsNode => {
+        const vehicles = tsNode.children.filter(c => c.name === 'vehicle');
+        vehicles.forEach(v => {
+            const speed = parseFloat(getAttrCI(v.attrs, 'speed'));
+            if (!isFinite(speed)) return; // no usable speed for this row — skip rather than guess a bucket
+            vehicleStepCount++;
+
+            const bucket = speed < threshold ? idle : moving;
+            if (speed < threshold) idleVehicleSteps++; else movingVehicleSteps++;
+
+            bucket.CO += ((parseFloat(getAttrCI(v.attrs, 'CO')) || 0) * stepLengthSec) / 1000; // mg -> g
+            bucket.CO2 += ((parseFloat(getAttrCI(v.attrs, 'CO2')) || 0) * stepLengthSec) / 1000000; // mg -> kg
+            bucket.HC += ((parseFloat(getAttrCI(v.attrs, 'HC')) || 0) * stepLengthSec) / 1000; // mg -> g
+            bucket.PMx += ((parseFloat(getAttrCI(v.attrs, 'PMx')) || 0) * stepLengthSec) / 1000; // mg -> g
+            bucket.NOx += ((parseFloat(getAttrCI(v.attrs, 'NOx')) || 0) * stepLengthSec) / 1000; // mg -> g
+
+            // Same density split used by parseEmissionsXML's fuel-cost logic
+            // (Section 4.3/CLAUDE.md): 0.832 kg/L for bus/truck/van, 0.745
+            // kg/L for everything else. vType comes from this row's own
+            // `type` attribute, not looked up elsewhere.
+            const vType = (getAttrCI(v.attrs, 'type') || 'other').toLowerCase();
+            const fuelKg = ((parseFloat(getAttrCI(v.attrs, 'fuel')) || 0) * stepLengthSec) / 1000000;
+            const density = (vType.includes('bus') || vType.includes('truck') || vType.includes('van')) ? 0.832 : 0.745;
+            bucket.fuelLiters += fuelKg / density;
+        });
+    });
+
+    const warnings = [];
+    if (vehicleStepCount === 0) {
+        warnings.push('No <timestep>/<vehicle> records could be parsed from this file — it may be empty, truncated, or not a SUMO --emission-output file (this is a different file from --tripinfo-output; see README.md).');
+    }
+    parserWarnings.forEach(msg => warnings.push(`Malformed XML structure: ${msg}`));
+
+    return {
+        idleThresholdMps: threshold, stepLengthSec,
+        idle, moving,
+        idleVehicleSteps, movingVehicleSteps, vehicleStepCount,
+        warnings
+    };
+}
+
 // Loaded via a plain <script> tag on the main thread (module.exports guarded
 // for the case a bundler/Node context ever imports it instead).
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { parseEmissionsXML, parseXMLDocument };
+    module.exports = { parseEmissionsXML, parseEmissionSplitXML, parseXMLDocument };
 }

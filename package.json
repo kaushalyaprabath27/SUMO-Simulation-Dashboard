@@ -1,6 +1,6 @@
 {
   "name": "sumo-simulation-dashboard",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Desktop dashboard for building SUMO traffic simulation demand files and analyzing simulation output.",
   "main": "main.js",
   "scripts": {

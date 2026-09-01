@@ -553,6 +553,22 @@
                             <button class="btn btn-primary" onclick="App.handleEmissionsParse()" style="padding:0.75rem 1.5rem; font-size:1rem;">Parse &amp; Compare Scenarios</button>
                         </div>
 
+                        <!-- Idle vs. Moving Split -->
+                        <div class="card" style="margin-bottom:2rem; border:1px solid var(--border-subtle,#ccc);">
+                            <div class="card-header"><h3 class="card-title">Idle vs. Moving Emissions Split</h3></div>
+                            <div class="card-body">
+                                <p class="section-desc" style="margin-bottom:0.75rem;">Needs a different file from the scenario comparison above: SUMO's <code>--emission-output</code> (per-timestep, with each vehicle's instantaneous speed), not <code>tripinfo_data.xml</code>. See the README for the exact SUMO command that produces it — <code>tripinfo_data.xml</code> alone has no per-timestep speed and cannot support this split.</p>
+                                <div style="display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin-bottom:1rem;">
+                                    <input type="file" id="file-emission-split" accept=".xml" class="form-control" style="width:auto;">
+                                    <label style="font-weight:500; font-size:0.88rem;">Idle threshold (m/s):
+                                        <input type="number" id="emission-split-threshold" value="0.1" step="0.05" min="0" class="form-control" style="width:80px; padding:0.3rem 0.5rem; margin-left:0.3rem;">
+                                    </label>
+                                    <button class="btn btn-primary" onclick="App.handleEmissionSplitParse()">Compute split</button>
+                                </div>
+                                <div id="emission-split-results"></div>
+                            </div>
+                        </div>
+
                         <div id="emissions-results" style="display:none;">
                             <!-- Traffic Health Score Card -->
                             <div id="health-score-card" style="display:grid; grid-template-columns:repeat(5,1fr); gap:1rem; margin-bottom:2rem;">

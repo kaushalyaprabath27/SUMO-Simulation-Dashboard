@@ -4741,6 +4741,89 @@ const App = {
             });
         },
 
+        // Same worker/fallback pattern as _parseEmissionsAsync, but for the
+        // idle/moving split (parseEmissionSplitXML) -- a different input file
+        // (SUMO --emission-output, not --tripinfo-output) and a different
+        // result shape, so kept as its own method rather than overloading
+        // the tripinfo one.
+        _parseEmissionSplitAsync(xmlText, idleThresholdMps) {
+            return new Promise((resolve, reject) => {
+                const fallback = () => {
+                    try { resolve(parseEmissionSplitXML(xmlText, idleThresholdMps)); }
+                    catch (e2) { reject(e2); }
+                };
+                let worker;
+                try {
+                    worker = new Worker('emissionsWorker.js');
+                } catch (e) {
+                    fallback();
+                    return;
+                }
+                worker.onmessage = (e) => {
+                    worker.terminate();
+                    if (e.data.error) { fallback(); return; }
+                    (e.data.result.warnings || []).forEach(msg => this.showToast('Warning: ' + msg, 'error'));
+                    resolve(e.data.result);
+                };
+                worker.onerror = () => {
+                    worker.terminate();
+                    fallback();
+                };
+                worker.postMessage({ xmlText, mode: 'split', idleThresholdMps });
+            });
+        },
+
+        async handleEmissionSplitParse() {
+            const inp = document.getElementById('file-emission-split');
+            const resultsEl = document.getElementById('emission-split-results');
+            if (!inp || !inp.files[0]) {
+                this.showToast('Choose a SUMO --emission-output file first.', 'error');
+                return;
+            }
+            const threshold = parseFloat(document.getElementById('emission-split-threshold')?.value);
+            const idleThresholdMps = isFinite(threshold) && threshold >= 0 ? threshold : 0.1;
+
+            const xml = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = e => resolve(e.target.result);
+                reader.onerror = () => reject(new Error('File read error'));
+                reader.readAsText(inp.files[0]);
+            });
+
+            let result;
+            try {
+                result = await this._parseEmissionSplitAsync(xml, idleThresholdMps);
+            } catch (e) {
+                this.showToast('Could not parse this file: ' + (e.message || e), 'error');
+                return;
+            }
+            this.renderEmissionSplit(result, resultsEl);
+        },
+
+        renderEmissionSplit(result, resultsEl) {
+            if (!resultsEl) return;
+            if (!result.vehicleStepCount) {
+                resultsEl.innerHTML = '<p style="color:#b91c1c;">No usable vehicle/timestep records found in this file.</p>';
+                return;
+            }
+            const pct = (part, whole) => whole > 0 ? ((100 * part) / whole).toFixed(1) + '%' : '—';
+            const rows = [
+                ['CO',   result.idle.CO,        result.moving.CO,        'g'],
+                ['HC',   result.idle.HC,        result.moving.HC,        'g'],
+                ['PMx',  result.idle.PMx,       result.moving.PMx,       'g'],
+                ['NOx',  result.idle.NOx,       result.moving.NOx,       'g'],
+                ['CO2',  result.idle.CO2,       result.moving.CO2,       'kg'],
+                ['Fuel', result.idle.fuelLiters, result.moving.fuelLiters, 'L'],
+            ];
+            let html = `<p style="font-size:0.85rem; color:var(--text-secondary,#888);">Threshold: ${result.idleThresholdMps} m/s &nbsp;|&nbsp; Step length (inferred): ${result.stepLengthSec} s &nbsp;|&nbsp; ${result.vehicleStepCount} vehicle-steps (${result.idleVehicleSteps} idle, ${result.movingVehicleSteps} moving)</p>`;
+            html += '<table class="data-table"><thead><tr><th>Pollutant</th><th>Idle</th><th>Moving</th><th>Idle share</th></tr></thead><tbody>';
+            rows.forEach(([label, idleVal, movingVal, unit]) => {
+                html += `<tr><td>${label}</td><td>${idleVal.toFixed(3)} ${unit}</td><td>${movingVal.toFixed(3)} ${unit}</td><td>${pct(idleVal, idleVal + movingVal)}</td></tr>`;
+            });
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+        },
+
     renderEmissionsDashboard(scenarios, dieselPrice, petrolPrice) {
         if (!scenarios || !scenarios.length) return;
 

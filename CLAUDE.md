@@ -44,7 +44,7 @@ a quick-start; this file is the deeper technical reference.
   check: 1.0.31.
 - No CI, no Docker, no lint config, no TypeScript. There is now `npm test`
   (Node's built-in `node --test`, no dependency added) covering nine
-  extracted pure modules — 113 tests total — plus a separate
+  extracted pure modules — 121 tests total — plus a separate
   `npm run test:pdf-smoke` that needs a real Electron window (can't run
   under plain Node). See "Testing" below for exactly what's covered and
   what still isn't.
@@ -61,7 +61,7 @@ a quick-start; this file is the deeper technical reference.
 | `app.js` | ~5400 | Everything else: all 9 tabs, state, parsing, math, PDF report, undo/redo, persistence. One `const App = {...}`. |
 | `data.js` | ~150 | Static data: 7 built-in vehicle-type defaults, param metadata, legacy `TIME_INTERVALS`. |
 | `detector.js` | ~330 | `DetectorManager` — saved validation-run history + CSV export only; the dead calibration/GEH/Google-Sheets code that used to live here has been removed (see History). |
-| `emissionsParser.js` | ~330 | `parseEmissionsXML()` — the tripinfo/emissions parser, extracted into a plain `this`-free function so the exact same code can run either on the main thread or inside `emissionsWorker.js`. No longer regex-based (see History): `parseXMLDocument()` in the same file is a genuine hand-rolled XML tokenizer (character-by-character, no regex/pattern matching for tag/attribute extraction) that builds a small generic element tree, which `parseEmissionsXML()` then walks for `<tripinfo>`/`<emissions>` elements. Also `module.exports`-guarded so `tests/` can `require()` it directly under Node. Includes post-parse validation (see Formulas section). |
+| `emissionsParser.js` | ~430 | `parseEmissionsXML()` — the tripinfo/emissions parser, extracted into a plain `this`-free function so the exact same code can run either on the main thread or inside `emissionsWorker.js`. No longer regex-based (see History): `parseXMLDocument()` in the same file is a genuine hand-rolled XML tokenizer (character-by-character, no regex/pattern matching for tag/attribute extraction) that builds a small generic element tree, which `parseEmissionsXML()` then walks for `<tripinfo>`/`<emissions>` elements. Also has `parseEmissionSplitXML()` — the idle/moving emissions split, reading SUMO's separate `--emission-output` file (per-timestep, not per-trip) instead — see Formulas section. Both are `module.exports`-guarded so `tests/` can `require()` them directly under Node. |
 | `emissionsWorker.js` | ~15 | Web Worker entry point — `importScripts('emissionsParser.js')`, parses off the main thread so a large tripinfo file doesn't freeze the UI. |
 | `graphDistance.js` | ~85 | `computeLaneGraphDistance()` — the Dijkstra lane-graph shortest-path calc behind MAPE's "📐 Auto" segment-distance button, extracted verbatim from `App._computeDetectorDistance` for Node testability. |
 | `intervalAggregation.js` | ~50 | `aggregateRecordsByInterval()` — the interval-bucketing logic behind Validation/MAPE's "Interval (min)" control, extracted verbatim from `App._aggregateRecordsByInterval` (which was already `this`-free). |
@@ -73,7 +73,7 @@ a quick-start; this file is the deeper technical reference.
 | `xmlBuilder.js` | ~30 | `App._buildFullXML()` — now a thin wrapper that gathers `App`'s live state (`_flowsState`/`_pedState`/`_busState`/`_customVehicleTypes`/`project.crossingEdges`, the `#sim-start-time` input, `App._buildVTypeXML`) and delegates to `xmlBuilderCore.js`. |
 | `index.html` | ~845 | All 9 tabs' markup, splash screen, global error overlay. Loads `emissionsParser.js`/`graphDistance.js`/`intervalAggregation.js`/`gehMape.js`/`polyReg.js`/`pedMatching.js`/`reportDataPrep.js`/`xmlBuilderCore.js` via `<script>` before `app.js`. |
 | `styles.css` | ~389 | Plain CSS, light/dark via `body.dark-mode`. |
-| `tests/*.test.js` | ~1050 total | `node --test` coverage — 113 tests across 9 files, all passing. See "Testing" below. |
+| `tests/*.test.js` | ~1050 total | `node --test` coverage — 121 tests across 10 files, all passing. See "Testing" below. |
 | `tests/pdfSmoke/index.js` | ~140 | A separate, non-`node --test` smoke test for `App.generateFullReport` — needs a real Electron window (jsPDF/Chart.js/DOM), run via `npm run test:pdf-smoke`. See "Testing" below. |
 
 ## `main.js` — IPC channels (exact contract)
@@ -355,6 +355,33 @@ wrapping every persist in try/catch.
   degrades to blocking-but-correct, not broken. See "Testing" below for
   exactly how this was verified (real BrowserWindow, not the sandbox's
   plain-Node fallback).
+- **Idle/moving emissions split** (`parseEmissionSplitXML()`, `emissionsParser.js`,
+  UI: the "Idle vs. Moving Emissions Split" card in the Emissions Analysis
+  tab). Reads a different SUMO file from the rest of this tab: `--emission-
+  output` (one `<vehicle>` row per vehicle per simulation timestep, each row
+  carrying that vehicle's instantaneous speed and instantaneous emission
+  rate), not `--tripinfo-output`'s one `<emissions>` total per whole trip.
+  tripinfo has no per-timestep speed and cannot support this split — see the
+  comment above `parseEmissionSplitXML` for the full reasoning. SUMO reports
+  each row's pollutant/fuel values as a rate (mg/s or ml/s); the parser
+  infers the actual simulation step length from the gap between the first
+  two `<timestep time="...">` values in the file (not assumed to be SUMO's
+  1.0s default) and multiplies by it to get mass, before adding it to the
+  "idle" or "moving" total depending on whether that row's own speed is
+  below the threshold. Threshold defaults to 0.1 m/s and is a plain UI
+  input, not hardcoded — no citation was found that specifically justifies
+  0.1 m/s (EPA MOVES uses "speed = 0" for true idle at project scale, or a
+  much coarser ~1.1 m/s / 2.5 mph cutoff for a different, tire-wear-specific
+  purpose), so the manuscript reports results at 0.05 and 0.5 m/s alongside
+  0.1 as a sensitivity check rather than presenting 0.1 as standards-derived.
+  Fuel-to-liters uses the same density split as `parseEmissionsXML`
+  (0.832 kg/L bus/truck/van, 0.745 kg/L everything else), read from each
+  row's own `type` attribute. Runs through the same `emissionsWorker.js`
+  Worker as the tripinfo parser (`mode: 'split'` in the posted message)
+  since a corridor-scale `--emission-output` file is far larger than the
+  matching tripinfo file (308 MB / ~920,000 vehicle-timestep rows for this
+  project's full corridor run, parsed in a few seconds — see
+  `verification/` in the manuscript repo for the exact numbers and command).
 - **Emissions time bins**: bin width = `App._getIntervalFreqSec()` (same
   "Interval Duration" as Flows/MAPE, default 10 min → 600s); bin count =
   `ceil(simDurationMinutes * 60 / binWidthSeconds)`. Bin index for a trip:
@@ -558,12 +585,13 @@ check whether it's a code path this reset doesn't reach yet.
 ## Testing — exactly what's covered, how, and what isn't
 
 **`npm test`** (Node's built-in `node --test`, no dependency added) runs
-113 tests across 9 files, all passing:
+121 tests across 10 files, all passing:
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/emissionsParser.test.js` | 16 | Domain-level (`parseEmissionsXML`) coverage: trip counting, fuel-density branch, bin assignment/clamping, missing-emissions warning, single- vs double-quoted attributes, and **malformed-file hardening**: empty file, a truncated/mid-attribute file (now recovers the partial record and flags the truncation, rather than reporting zero — a deliberate behavior change, see Formulas section), BOM/UTF-16-declared file (parses clean), a record missing both `depart`/`timeLoss` (counted as skipped), the previously-documented unclosed-`<tripinfo>`-loses-data bug (now fully recovered — both records counted, correct totals — with the auto-repair reported as a warning), a non-UTF-8 file misread as UTF-8 (mojibake, parses clean), mixed Windows/Unix line endings (parses clean), and one pathologically long line with no breaks at all, 20,000 trips, ~225ms (parses clean, no slowdown). |
 | `tests/xmlTokenizer.test.js` | 12 | Tokenizer-level (`parseXMLDocument`) coverage, independent of the emissions domain logic: tree shape for a well-formed document, self-closing tags, single/double-quoted and unquoted attribute values, comments and CDATA sections skipped without disrupting siblings, XML declaration/DOCTYPE skipped, a leading BOM handled cleanly, a closing tag with no matching open tag (ignored + reported), a closing tag that matches an ancestor while skipping an unclosed descendant (auto-repaired + reported, descendant preserved), tags still open at end-of-file (auto-closed + reported as likely truncation), and a fully well-formed document producing zero parser warnings. |
+| `tests/emissionSplit.test.js` | 8 | `parseEmissionSplitXML` coverage on a small hand-computed `--emission-output` fixture (2 timesteps, 2 vehicles): default-threshold split against hand-computed idle/moving totals per pollutant plus fuel, step-length inference, threshold configurability (including threshold 0 and a threshold that reclassifies every row), an empty file reporting a warning rather than a silent zero, and a `<vehicle>` row missing `speed` being skipped rather than guessed into a bucket. Cross-checked against `verification/verify_emission_split.py` (independent Python reference, in the manuscript repo) on the real 308 MB corridor `--emission-output` file — exact match at three thresholds (0.05/0.1/0.5 m/s). |
 | `tests/graphDistance.test.js` | 9 | Normal multi-lane chains, same-lane forward/backward, disconnected detectors, unknown lane ids, the 8000m bound (just over and just under), a 25,000-node graph confirming the 20,000-visit cap bounds runtime, custom bound options. |
 | `tests/intervalAggregation.test.js` | 7 | Normal bucketing, empty input, missing keys, exact-duplicate begins, boundary-unaligned/overlapping begins, multiple independent keys, average-of-zero-records guard. |
 | `tests/gehMape.test.js` | 18 | GEH (`M=C=0`, known-value check, perfect match, all 3 status thresholds, all 3 model-status thresholds), MAPE avg-speed/simulated-time, the unified MAPE error/status formula, and the **regression test for the exact misclassification found and fixed** — a fully-configured segment with a genuine zero-speed interval now correctly reports `Invalid`, not a false `Valid (Excellent)` — plus a test confirming `getMapeStatus` delegates to the same shared threshold logic as `getMapeStatusEdgeFormat` rather than duplicating it. |
