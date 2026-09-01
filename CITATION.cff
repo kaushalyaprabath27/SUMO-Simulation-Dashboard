@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the paper describing it (once
+  published — see preferred-citation below) and/or this software release.
+title: SUMO Simulation Dashboard
+type: software
+authors:
+  - given-names: W.P.K.
+    family-names: Warnasuriya
+    affiliation: >-
+      Department of Civil and Environmental Engineering, Faculty of
+      Engineering, University of Ruhuna, Sri Lanka
+  - given-names: T.M.
+    family-names: Rengarasu
+    affiliation: >-
+      Department of Civil and Environmental Engineering, Faculty of
+      Engineering, University of Ruhuna, Sri Lanka
+    email: rengarasu@cee.ruh.ac.lk
+  - given-names: R.
+    family-names: Saahith Ahamed
+    affiliation: >-
+      Department of Civil and Environmental Engineering, Faculty of
+      Engineering, University of Ruhuna, Sri Lanka
+repository-code: 'https://github.com/kaushalyaprabath27/SUMO-Simulation-Dashboard'
+license: MIT
+version: 1.0.0
+# TODO (author): fill in once the v1.0.0 tag is pushed and a Zenodo DOI is
+# minted for it -- see TODO_FOR_AUTHOR.md. Do not fabricate a DOI here in
+# the meantime.
+# doi: 10.5281/zenodo.XXXXXXX
+date-released: '2026-09-01'
+preferred-citation:
+  type: article
+  title: >-
+    An Open Desktop Dashboard for SUMO Traffic Model Calibration,
+    Validation, and Emissions Analysis
+  authors:
+    - given-names: W.P.K.
+      family-names: Warnasuriya
+    - given-names: T.M.
+      family-names: Rengarasu
+    - given-names: R.
+      family-names: Saahith Ahamed
+  # TODO (author): journal, volume, issue, pages, DOI once accepted/published
+  # by JSALT. Left incomplete rather than guessed -- see TODO_FOR_AUTHOR.md.

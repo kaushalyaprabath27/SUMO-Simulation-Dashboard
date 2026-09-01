@@ -4433,7 +4433,7 @@ const App = {
                 // Surfaced visibly rather than silently showing a curve
                 // that predicts an impossible negative value — same
                 // "don't hide a gap, flag it" pattern as the tripinfo
-                // parser's skippedRecords/tagCountMismatch warnings.
+                // parser's skippedRecords/parserWarnings.
                 el.innerHTML = '<i style="color:#b91c1c;">' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i><br><i style="color:#b91c1c;font-size:0.82em;">⚠ ' + reg.warning + '</i>';
             } else {
                 el.innerHTML = '<i>' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i>';
@@ -4692,19 +4692,19 @@ const App = {
 
         // Synchronous fallback (also still used by anything that hasn't been
         // moved to the Worker-based path). The actual parsing logic lives in
-        // emissionsParser.js's parseEmissionsRegexPure() so the exact same
-        // code can run inside emissionsWorker.js off the main thread.
+        // emissionsParser.js's parseEmissionsXML() so the exact same code can
+        // run inside emissionsWorker.js off the main thread.
         parseEmissionsRegex(xmlText, binDurSec, binCount) {
-            const result = parseEmissionsRegexPure(xmlText, binDurSec, binCount);
+            const result = parseEmissionsXML(xmlText, binDurSec, binCount);
             this._toastEmissionsParseWarnings(result);
             return result;
         },
 
-        // Surfaces parseEmissionsRegexPure's post-parse validation warnings
-        // (zero matched records, a record missing depart/timeLoss, an open/
-        // close <tripinfo> tag-count mismatch suggesting a malformed file, or
-        // trips with no <emissions> data) as visible toasts instead of
-        // letting any of them pass silently as empty/zero results.
+        // Surfaces parseEmissionsXML's post-parse validation warnings (zero
+        // matched records, a record missing depart/timeLoss, a malformed/
+        // auto-repaired XML structure, or trips with no <emissions> data) as
+        // visible toasts instead of letting any of them pass silently as
+        // empty/zero results.
         _toastEmissionsParseWarnings(result) {
             (result.warnings || []).forEach(msg => this.showToast('Warning: ' + msg, 'error'));
         },

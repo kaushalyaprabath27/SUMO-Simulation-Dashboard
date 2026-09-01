@@ -43,8 +43,8 @@ a quick-start; this file is the deeper technical reference.
   target actually configured is `win`/`nsis`). Current version at last
   check: 1.0.31.
 - No CI, no Docker, no lint config, no TypeScript. There is now `npm test`
-  (Node's built-in `node --test`, no dependency added) covering eight
-  extracted pure modules — 100 tests total — plus a separate
+  (Node's built-in `node --test`, no dependency added) covering nine
+  extracted pure modules — 113 tests total — plus a separate
   `npm run test:pdf-smoke` that needs a real Electron window (can't run
   under plain Node). See "Testing" below for exactly what's covered and
   what still isn't.
@@ -61,7 +61,7 @@ a quick-start; this file is the deeper technical reference.
 | `app.js` | ~5400 | Everything else: all 9 tabs, state, parsing, math, PDF report, undo/redo, persistence. One `const App = {...}`. |
 | `data.js` | ~150 | Static data: 7 built-in vehicle-type defaults, param metadata, legacy `TIME_INTERVALS`. |
 | `detector.js` | ~330 | `DetectorManager` — saved validation-run history + CSV export only; the dead calibration/GEH/Google-Sheets code that used to live here has been removed (see History). |
-| `emissionsParser.js` | ~215 | `parseEmissionsRegexPure()` — the tripinfo/emissions regex parser, extracted into a plain `this`-free function so the exact same code can run either on the main thread or inside `emissionsWorker.js`. Also `module.exports`-guarded so `tests/` can `require()` it directly under Node. Now includes post-parse validation (see Formulas section). |
+| `emissionsParser.js` | ~330 | `parseEmissionsXML()` — the tripinfo/emissions parser, extracted into a plain `this`-free function so the exact same code can run either on the main thread or inside `emissionsWorker.js`. No longer regex-based (see History): `parseXMLDocument()` in the same file is a genuine hand-rolled XML tokenizer (character-by-character, no regex/pattern matching for tag/attribute extraction) that builds a small generic element tree, which `parseEmissionsXML()` then walks for `<tripinfo>`/`<emissions>` elements. Also `module.exports`-guarded so `tests/` can `require()` it directly under Node. Includes post-parse validation (see Formulas section). |
 | `emissionsWorker.js` | ~15 | Web Worker entry point — `importScripts('emissionsParser.js')`, parses off the main thread so a large tripinfo file doesn't freeze the UI. |
 | `graphDistance.js` | ~85 | `computeLaneGraphDistance()` — the Dijkstra lane-graph shortest-path calc behind MAPE's "📐 Auto" segment-distance button, extracted verbatim from `App._computeDetectorDistance` for Node testability. |
 | `intervalAggregation.js` | ~50 | `aggregateRecordsByInterval()` — the interval-bucketing logic behind Validation/MAPE's "Interval (min)" control, extracted verbatim from `App._aggregateRecordsByInterval` (which was already `this`-free). |
@@ -73,7 +73,7 @@ a quick-start; this file is the deeper technical reference.
 | `xmlBuilder.js` | ~30 | `App._buildFullXML()` — now a thin wrapper that gathers `App`'s live state (`_flowsState`/`_pedState`/`_busState`/`_customVehicleTypes`/`project.crossingEdges`, the `#sim-start-time` input, `App._buildVTypeXML`) and delegates to `xmlBuilderCore.js`. |
 | `index.html` | ~845 | All 9 tabs' markup, splash screen, global error overlay. Loads `emissionsParser.js`/`graphDistance.js`/`intervalAggregation.js`/`gehMape.js`/`polyReg.js`/`pedMatching.js`/`reportDataPrep.js`/`xmlBuilderCore.js` via `<script>` before `app.js`. |
 | `styles.css` | ~389 | Plain CSS, light/dark via `body.dark-mode`. |
-| `tests/*.test.js` | ~900 total | `node --test` coverage — 100 tests across 8 files, all passing. See "Testing" below. |
+| `tests/*.test.js` | ~1050 total | `node --test` coverage — 113 tests across 9 files, all passing. See "Testing" below. |
 | `tests/pdfSmoke/index.js` | ~140 | A separate, non-`node --test` smoke test for `App.generateFullReport` — needs a real Electron window (jsPDF/Chart.js/DOM), run via `npm run test:pdf-smoke`. See "Testing" below. |
 
 ## `main.js` — IPC channels (exact contract)
@@ -284,52 +284,77 @@ wrapping every persist in try/catch.
 - **LOS (Level of Service) grade** (`_getLOSGrade`, Simulation Results tab),
   based on average per-vehicle delay (`avgTimeLoss`, seconds): `<10` → A
   (Free Flow), `<20` → B, `<35` → C, `<55` → D, `≤80` → E, else → F.
-- **Emissions unit conversion** (`parseEmissionsRegexPure`, in
+- **Emissions unit conversion** (`parseEmissionsXML`, in
   `emissionsParser.js`): SUMO reports CO/HC/PMx/NOx in mg → divided by 1000
   for grams; CO2 in mg → divided by 1,000,000 for kg. Fuel: mg → kg
   (÷1,000,000), then ÷ density to get liters — **0.832 kg/L for
   bus/truck/van (diesel-class vehicles)**, **0.745 kg/L for everything else
   (petrol-class)**. This hardcoded density split is how the app decides
   "diesel" vs "petrol" cost — there's no `fuelType` field read from the
-  vType itself. This parser runs regex over the raw tripinfo text rather
-  than building a DOM tree, on purpose — corridor-scale tripinfo output can
-  be large, and one regex pass avoids the memory/time cost of parsing it
-  into a full document just to read it once. **The regex approach itself is
-  intentionally unchanged** — the hardening below is a validation layer on
-  top of it, not a replacement.
-- **Emissions parser now validates its own output instead of silently
-  returning zeros.** `parseEmissionsRegexPure` returns three new fields —
-  `skippedRecords` (records matched but missing both `depart` and
-  `timeLoss`, previously dropped with no trace), `openTagCount`/
-  `tagCountMismatch` (a raw count of literal `<tripinfo` occurrences,
-  compared against how many complete records actually matched), and
-  `warnings` (an array of human-readable strings covering: zero records
-  parsed, a tag-count mismatch, skipped records, and trips-with-no-
-  emissions). `App._toastEmissionsParseWarnings(result)` surfaces every
-  entry in `warnings` as a visible toast. **A real, confirmed pre-existing
-  bug was found this way and is now surfaced (not fixed — the matching
-  regex was deliberately left untouched):** a `<tripinfo>` missing its own
-  closing tag causes the non-greedy `.*?` to bridge forward to the *next*
-  available `</tripinfo>`, silently merging two records into one match and
-  completely dropping the second trip's data with no error of any kind.
-  `tests/emissionsParser.test.js` reproduces this exact case (2 open tags,
-  only 1 matched record, the second trip's CO2 never appears in totals) and
-  confirms the tag-count mismatch now catches it. Also tested: empty file,
-  a truncated/mid-attribute file (both already correctly reported "no
-  records" even before this change), and a BOM-prefixed/UTF-16-declared
-  file that turned out to already parse cleanly with zero warnings (a case
-  that *didn't* need hardening).
+  vType itself.
+- **The tripinfo/emissions parser is a genuine hand-rolled XML parser, not
+  regex/string matching** (see History for why it changed). `parseXMLDocument()`
+  in `emissionsParser.js` is a small, dependency-free tokenizer: it scans the
+  raw text one character at a time (`charCodeAt` comparisons, no regex) to
+  recognize opening/closing/self-closing tags, quoted or unquoted attribute
+  values, comments, CDATA sections and processing instructions, and builds a
+  generic element tree (`{name, attrs, children}`). `parseEmissionsXML()`
+  then walks that tree for `<tripinfo>` elements (via `collectByName`,
+  recursively, regardless of nesting depth) and each one's own `<emission>`/
+  `<emissions>` child, instead of pattern-matching substrings out of the raw
+  text. It's still a single pass with no external DOM/XML library — this
+  project's "no added dependency" rule (see Stack) held, it just moved from
+  regex to a purpose-built tokenizer. Direct tokenizer-level tests live in
+  `tests/xmlTokenizer.test.js`; the malformed-file tests below exercise the
+  combination of both layers.
+- **Malformed input is repaired, not just detected — a deliberate behavior
+  change from the regex-based version.** The tokenizer is lenient by design
+  (SUMO output is sometimes truncated by a killed run, and a real file with
+  an unclosed `<tripinfo>` tag has already been seen in this project's
+  history): a closing tag that doesn't match the innermost open element
+  searches outward for the nearest ancestor with that name and auto-closes
+  everything in between; anything still open at end-of-file is auto-closed
+  too. Both recovery paths are recorded in a `parserWarnings` array (folded
+  into `parseEmissionsXML`'s own `warnings`, prefixed `Malformed XML
+  structure:`) rather than silently "fixed" with no trace — but critically,
+  **no element the tokenizer actually saw is ever dropped**, because every
+  opening tag becomes a node somewhere in the tree and `collectByName` walks
+  every depth to find it. This closes a real, previously-documented bug
+  outright rather than merely flagging it: the old regex's non-greedy `.*?`
+  used to bridge past an unclosed `<tripinfo>` tag to the next available
+  `</tripinfo>`, silently merging two records into one match and completely
+  dropping the second trip's data. With the tree-based parser, that same
+  malformed file still produces a warning (the auto-repair message) but
+  **both trips' data are now present and correct in the totals** —
+  `tests/emissionsParser.test.js`'s "a `<tripinfo>` missing its own closing
+  tag is now fully recovered" test reproduces the exact case and confirms
+  both records' CO2 contributions are counted. One consequence: the old
+  `openTagCount`/`tagCountMismatch` diagnostic fields are gone — they existed
+  specifically to detect the old data-loss bug via a count mismatch, and
+  with a recovering tree parser that count can no longer diverge from
+  `tripCount` by construction, so the fields would only ever have read
+  `false`/equal. `skippedRecords` (records matched but missing both `depart`
+  and `timeLoss`) is unchanged. One other file also changed behavior as a
+  side effect of the rewrite, not by design: a file truncated mid-attribute
+  used to report a flat "no records" (the old regex never had a complete
+  match at all); the tokenizer instead recognizes the partial `<tripinfo>`
+  tag as soon as it sees it, keeps whatever attributes appeared before the
+  cutoff, and reports the truncation itself as a structural warning — see
+  `tests/emissionsParser.test.js`'s "truncated mid-attribute" test for the
+  updated expectation.
 - **Emissions parsing runs off the main thread — confirmed live in a real
   Electron window, not just unit tests.** `App._parseEmissionsAsync()`
   (`app.js`) posts the raw XML to `emissionsWorker.js`, which
   `importScripts('emissionsParser.js')` and calls the same
-  `parseEmissionsRegexPure` — so a large upload no longer freezes the UI
-  while it's parsed. If `new Worker(...)` throws, or the worker errors out
-  for any reason, `_parseEmissionsAsync` silently falls back to running
-  `parseEmissionsRegex` (the synchronous wrapper, same file) in place — a
-  Worker-loading failure degrades to blocking-but-correct, not broken. See
-  "Testing" below for exactly how this was verified (real BrowserWindow,
-  not the sandbox's plain-Node fallback).
+  `parseEmissionsXML` — so a large upload no longer freezes the UI while
+  it's parsed. If `new Worker(...)` throws, or the worker errors out for any
+  reason, `_parseEmissionsAsync` silently falls back to running
+  `parseEmissionsRegex` (`app.js`'s own synchronous wrapper method — the
+  name predates this rewrite and was left as-is, since it's just an internal
+  method name, not the parser itself) in place — a Worker-loading failure
+  degrades to blocking-but-correct, not broken. See "Testing" below for
+  exactly how this was verified (real BrowserWindow, not the sandbox's
+  plain-Node fallback).
 - **Emissions time bins**: bin width = `App._getIntervalFreqSec()` (same
   "Interval Duration" as Flows/MAPE, default 10 min → 600s); bin count =
   `ceil(simDurationMinutes * 60 / binWidthSeconds)`. Bin index for a trip:
@@ -533,11 +558,12 @@ check whether it's a code path this reset doesn't reach yet.
 ## Testing — exactly what's covered, how, and what isn't
 
 **`npm test`** (Node's built-in `node --test`, no dependency added) runs
-100 tests across 8 files, all passing:
+113 tests across 9 files, all passing:
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/emissionsParser.test.js` | 15 | Trip counting, fuel-density branch, bin assignment/clamping, missing-emissions warning, **malformed-file hardening**: empty file, truncated file, BOM/UTF-16-declared file (parses clean), a record missing both `depart`/`timeLoss` (now counted as skipped), the confirmed unclosed-`<tripinfo>`-swallows-next-record case (now flagged via tag-count mismatch), a non-UTF-8 file misread as UTF-8 (mojibake, parses clean), mixed Windows/Unix line endings (parses clean), and one pathologically long line with no breaks at all, 20,000 trips, ~70ms (parses clean, no slowdown). None of the encoding/line-ending/long-line cases turned out to be a gap. |
+| `tests/emissionsParser.test.js` | 16 | Domain-level (`parseEmissionsXML`) coverage: trip counting, fuel-density branch, bin assignment/clamping, missing-emissions warning, single- vs double-quoted attributes, and **malformed-file hardening**: empty file, a truncated/mid-attribute file (now recovers the partial record and flags the truncation, rather than reporting zero — a deliberate behavior change, see Formulas section), BOM/UTF-16-declared file (parses clean), a record missing both `depart`/`timeLoss` (counted as skipped), the previously-documented unclosed-`<tripinfo>`-loses-data bug (now fully recovered — both records counted, correct totals — with the auto-repair reported as a warning), a non-UTF-8 file misread as UTF-8 (mojibake, parses clean), mixed Windows/Unix line endings (parses clean), and one pathologically long line with no breaks at all, 20,000 trips, ~225ms (parses clean, no slowdown). |
+| `tests/xmlTokenizer.test.js` | 12 | Tokenizer-level (`parseXMLDocument`) coverage, independent of the emissions domain logic: tree shape for a well-formed document, self-closing tags, single/double-quoted and unquoted attribute values, comments and CDATA sections skipped without disrupting siblings, XML declaration/DOCTYPE skipped, a leading BOM handled cleanly, a closing tag with no matching open tag (ignored + reported), a closing tag that matches an ancestor while skipping an unclosed descendant (auto-repaired + reported, descendant preserved), tags still open at end-of-file (auto-closed + reported as likely truncation), and a fully well-formed document producing zero parser warnings. |
 | `tests/graphDistance.test.js` | 9 | Normal multi-lane chains, same-lane forward/backward, disconnected detectors, unknown lane ids, the 8000m bound (just over and just under), a 25,000-node graph confirming the 20,000-visit cap bounds runtime, custom bound options. |
 | `tests/intervalAggregation.test.js` | 7 | Normal bucketing, empty input, missing keys, exact-duplicate begins, boundary-unaligned/overlapping begins, multiple independent keys, average-of-zero-records guard. |
 | `tests/gehMape.test.js` | 18 | GEH (`M=C=0`, known-value check, perfect match, all 3 status thresholds, all 3 model-status thresholds), MAPE avg-speed/simulated-time, the unified MAPE error/status formula, and the **regression test for the exact misclassification found and fixed** — a fully-configured segment with a genuine zero-speed interval now correctly reports `Invalid`, not a false `Valid (Excellent)` — plus a test confirming `getMapeStatus` delegates to the same shared threshold logic as `getMapeStatusEdgeFormat` rather than duplicating it. |
@@ -689,11 +715,13 @@ test, not just a one-off manual verification.
   (unified onto the standard MAPE formula, plus a display fix). One
   residual ambiguity remains open by design (not a fork in which formula is
   correct) — see that same section.
-- **A `<tripinfo>` missing its own closing tag silently merges with the
-  next record** (see Formulas section) — a confirmed, pre-existing regex-
-  matching behavior, now at least detected and surfaced as a warning
-  (`tagCountMismatch`) rather than silently producing an incomplete result.
-  The underlying regex was deliberately not changed.
+- **~~A `<tripinfo>` missing its own closing tag silently merges with the
+  next record~~ — fixed.** This was a confirmed, pre-existing regex-matching
+  bug (see Formulas section for the full writeup). It's now fixed outright,
+  not just detected: the emissions/tripinfo parser was rewritten from regex
+  to a real hand-rolled XML tokenizer that auto-repairs malformed nesting
+  instead of silently dropping data, while still reporting the repair as a
+  warning.
 - **The tool checks calibration arithmetic, not field-data quality.** GEH
   and MAPE only ever compare simulated output against whatever observed
   numbers get typed into `sumoObservedGEH`/`sumoObservedMAPE` — a model can
@@ -802,6 +830,40 @@ largest remaining untested piece of pure logic in the codebase — covering
 vType assembly, vehicle flows, the bus-stop-dwell-attachment special case,
 the pedestrian 4-burst-split logic, parking flows, and final cross-category
 sort ordering.
+
+A fifth pass, at explicit user request, replaced `emissionsParser.js`'s
+regex-based tripinfo/emissions extraction with a genuine hand-rolled XML
+parser — the user asked specifically to remove string/pattern matching from
+this file rather than keep it as a documented, deliberately-unfixed quirk.
+`parseXMLDocument()` is a dependency-free, character-by-character tokenizer
+(no regex anywhere in the tag/attribute-reading logic) that builds a small
+generic element tree; `parseEmissionsXML()` (renamed from
+`parseEmissionsRegexPure`, which was no longer an accurate name) walks that
+tree instead of pattern-matching the raw text. Two real things came out of
+doing this properly rather than as a drop-in replacement: (1) a genuine bug
+in the first draft, caught by a direct tokenizer unit test rather than the
+domain-level emissions tests — an unquoted attribute value's scanner didn't
+stop at `/`, so `foo=bar/>` read `bar/` as the value and missed the
+self-close marker; fixed by also stopping the scan at `/`. (2) The tokenizer
+being lenient about malformed nesting (auto-repairing a mismatched/missing
+closing tag rather than erroring out, since real truncated SUMO output has
+already been seen in this project) turned the previously-documented
+"unclosed `<tripinfo>` silently drops the next record" bug into something
+actually fixed, not merely detected — every element the tokenizer sees ends
+up in the tree even after a repair, so nothing is lost, and the repair
+itself is still reported as a warning. That made the old
+`openTagCount`/`tagCountMismatch` diagnostic fields meaningless (they can no
+longer diverge from `tripCount` by construction) and they were removed
+rather than kept as dead weight. One side effect of the rewrite that wasn't
+the point of the exercise but is worth knowing about: a file truncated
+mid-attribute now reports a recovered partial record plus a truncation
+warning, instead of the old flat "no records" (the old regex simply never
+had a complete match to report). All of this was re-verified live in a real
+Electron window — direct calls, the full `_parseEmissionsAsync` Worker path
+through the actual `emissionsWorker.js` file (not just the synchronous
+fallback), and the malformed-nesting recovery case, confirming the toast
+that reaches `App.showToast` reads "auto-repaired, no element was dropped"
+rather than the old silent data loss.
 
 ## Running it
 
