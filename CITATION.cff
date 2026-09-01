@@ -23,8 +23,11 @@ authors:
       Engineering, University of Ruhuna, Sri Lanka
 repository-code: 'https://github.com/kaushalyaprabath27/SUMO-Simulation-Dashboard'
 license: MIT
-version: 1.0.0
-# TODO (author): fill in once the v1.0.0 tag is pushed and a Zenodo DOI is
+version: 1.1.0
+# v1.0.0 (commit 9734e32) is an earlier tagged release, from before the
+# emissions parser was rewritten from regex string-matching to a real XML
+# tokenizer. v1.1.0 is the release described and verified in the paper.
+# TODO (author): fill in once the v1.1.0 tag is pushed and a Zenodo DOI is
 # minted for it -- see TODO_FOR_AUTHOR.md. Do not fabricate a DOI here in
 # the meantime.
 # doi: 10.5281/zenodo.XXXXXXX
