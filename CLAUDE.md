@@ -42,9 +42,11 @@ a quick-start; this file is the deeper technical reference.
 - `electron-builder` → NSIS installer for Windows (`npm run dist`; the only
   target actually configured is `win`/`nsis`). Current version at last
   check: 1.0.31.
-- No CI, no Docker, no lint config, no TypeScript. There is now `npm test`
-  (Node's built-in `node --test`, no dependency added) covering nine
-  extracted pure modules — 125 tests total — plus a separate
+- GitHub Actions CI (`.github/workflows/ci.yml`) runs the full test suite
+  with coverage on every push/PR. No Docker, no lint config, no TypeScript.
+  There is now `npm test`
+  (Node's built-in `node --test`, no dependency added) covering eleven
+  extracted pure modules — 149 tests total — plus a separate
   `npm run test:pdf-smoke` that needs a real Electron window (can't run
   under plain Node). See "Testing" below for exactly what's covered and
   what still isn't.
@@ -73,7 +75,7 @@ a quick-start; this file is the deeper technical reference.
 | `xmlBuilder.js` | ~30 | `App._buildFullXML()` — now a thin wrapper that gathers `App`'s live state (`_flowsState`/`_pedState`/`_busState`/`_customVehicleTypes`/`project.crossingEdges`, the `#sim-start-time` input, `App._buildVTypeXML`) and delegates to `xmlBuilderCore.js`. |
 | `index.html` | ~845 | All 9 tabs' markup, splash screen, global error overlay. Loads `emissionsParser.js`/`graphDistance.js`/`intervalAggregation.js`/`gehMape.js`/`polyReg.js`/`pedMatching.js`/`reportDataPrep.js`/`xmlBuilderCore.js` via `<script>` before `app.js`. |
 | `styles.css` | ~389 | Plain CSS, light/dark via `body.dark-mode`. |
-| `tests/*.test.js` | ~1050 total | `node --test` coverage — 125 tests across 11 files, all passing. See "Testing" below. |
+| `tests/*.test.js` | ~1050 total | `node --test` coverage — 149 tests across 12 files, all passing. See "Testing" below. |
 | `tests/pdfSmoke/index.js` | ~140 | A separate, non-`node --test` smoke test for `App.generateFullReport` — needs a real Electron window (jsPDF/Chart.js/DOM), run via `npm run test:pdf-smoke`. See "Testing" below. |
 
 ## `main.js` — IPC channels (exact contract)
@@ -585,7 +587,7 @@ check whether it's a code path this reset doesn't reach yet.
 ## Testing — exactly what's covered, how, and what isn't
 
 **`npm test`** (Node's built-in `node --test`, no dependency added) runs
-125 tests across 11 files, all passing:
+149 tests across 12 files, all passing:
 
 | File | Tests | Covers |
 |---|---|---|
@@ -593,6 +595,7 @@ check whether it's a code path this reset doesn't reach yet.
 | `tests/xmlTokenizer.test.js` | 12 | Tokenizer-level (`parseXMLDocument`) coverage, independent of the emissions domain logic: tree shape for a well-formed document, self-closing tags, single/double-quoted and unquoted attribute values, comments and CDATA sections skipped without disrupting siblings, XML declaration/DOCTYPE skipped, a leading BOM handled cleanly, a closing tag with no matching open tag (ignored + reported), a closing tag that matches an ancestor while skipping an unclosed descendant (auto-repaired + reported, descendant preserved), tags still open at end-of-file (auto-closed + reported as likely truncation), and a fully well-formed document producing zero parser warnings. |
 | `tests/emissionSplit.test.js` | 8 | `parseEmissionSplitXML` coverage on a small hand-computed `--emission-output` fixture (2 timesteps, 2 vehicles): default-threshold split against hand-computed idle/moving totals per pollutant plus fuel, step-length inference, threshold configurability (including threshold 0 and a threshold that reclassifies every row), an empty file reporting a warning rather than a silent zero, and a `<vehicle>` row missing `speed` being skipped rather than guessed into a bucket. Cross-checked against `verification/verify_emission_split.py` (independent Python reference, in the manuscript repo) on the real 308 MB corridor `--emission-output` file — exact match at three thresholds (0.05/0.1/0.5 m/s). |
 | `tests/vehicleTypeDefaults.test.js` | 4 | `data.js`'s built-in `VEHICLE_TYPES` defaults: every type's `emissionClass` is HBEFA4 (not HBEFA3), motorcycle and tuk_tuk use a motorcycle-specific class rather than a generic light-duty-vehicle one, none still uses one of the five specific pre-fix class strings, and the pedestrian type uses `HBEFA4/zero`. See History for what this regression-guards against. |
+| `tests/vendorIntegrity.test.js` | 5 | Recomputes the SHA-256 and size of each vendored library (`vendor/chart.umd.min.js`/`jspdf.umd.min.js`/`html2canvas.min.js`) against `vendor/README.md`'s manifest, confirms `index.html` still references all three by their local `vendor/` path, and confirms no `<script>` tag anywhere in `index.html` loads from an external origin (`http://`/`https://`) — the property that makes "offline, no server" a checked fact rather than an assertion. |
 | `tests/graphDistance.test.js` | 9 | Normal multi-lane chains, same-lane forward/backward, disconnected detectors, unknown lane ids, the 8000m bound (just over and just under), a 25,000-node graph confirming the 20,000-visit cap bounds runtime, custom bound options. |
 | `tests/intervalAggregation.test.js` | 7 | Normal bucketing, empty input, missing keys, exact-duplicate begins, boundary-unaligned/overlapping begins, multiple independent keys, average-of-zero-records guard. |
 | `tests/gehMape.test.js` | 18 | GEH (`M=C=0`, known-value check, perfect match, all 3 status thresholds, all 3 model-status thresholds), MAPE avg-speed/simulated-time, the unified MAPE error/status formula, and the **regression test for the exact misclassification found and fixed** — a fully-configured segment with a genuine zero-speed interval now correctly reports `Invalid`, not a false `Valid (Excellent)` — plus a test confirming `getMapeStatus` delegates to the same shared threshold logic as `getMapeStatusEdgeFormat` rather than duplicating it. |
@@ -760,6 +763,42 @@ test, not just a one-off manual verification.
   arithmetic — and no validation logic added here attempts to.
 
 ## History (why some things look the way they do)
+
+A round of correctness fixes (JSALT manuscript revision, Phase 1) landed
+together: GEH's 5/10 thresholds are now applied to an hourly-equivalent
+scaled count (`gehMape.js`'s `scaleToHourly`), not the raw interval count
+directly, since TAG Unit M3.1's thresholds assume hourly flows and this
+project's data is often 10-minute bins; both the raw and hourly-equivalent
+GEH are shown, status is driven by the hourly one. GEH status labels
+renamed ("Valid (Excellent)"/"Marginal (Acceptable)"/"Invalid (Needs
+Calibration)" -> "Good fit"/"Marginal - investigate"/"Poor fit -
+recalibrate") since the old wording called a 5-10 reading "Acceptable" and
+"Marginal" in the same breath. A second, binary GEH rollup
+(`getTagM3RollupStatus`) was added alongside the existing three-tier
+per-detector one (`getGEHModelStatus`, now explicitly labelled as this
+dashboard's own local convention, not the TAG criterion), pooling all
+detectors together the way TAG M3.1's own criterion is actually stated.
+MAPE gained a signed mean percentage error (`calculateMpe`, alongside the
+existing always-positive `calculateMapeError`) and a user-editable
+acceptance band (default 15%, after the DMRB/TAG Unit M3.1 journey-time
+criterion) replacing a hardcoded 15. `polyReg.js`'s coefficient display
+switched from `.toFixed(2)` (which silently rounded a real ~2.2e-3
+coefficient to "0.00", erasing the term that defines the curve) to 4
+significant figures, and now fits a linear model alongside the quadratic
+(`fitLinearModel`, `compareModels`), reporting adjusted R² and AIC for
+both and which AIC prefers — the quadratic itself is unchanged, not
+removed. `emissionsParser.js`'s fuel-density magic numbers (0.832/0.745)
+became named, sourced constants (`FUEL_DENSITY_DIESEL_KG_PER_L`/
+`FUEL_DENSITY_PETROL_KG_PER_L`), and `parseEmissionSplitXML`'s
+idle/moving fuel totals now split by fuel type the way `parseEmissionsXML`
+already did (previously pooled-only there, an inconsistency between the
+two parsers). Importing a route file now warns when a vType has no
+`emissionClass` at all, since SUMO's own fleet-composition default may not
+match a South Asian fleet — see the `data.js` entry below for a real case
+of exactly that going unnoticed for this project's own built-in defaults.
+See `vendor/README.md` for the vendored-library provenance manifest and
+`tests/vendorIntegrity.test.js` for the checksum test this added, and
+`.github/workflows/ci.yml` for the CI this added.
 
 This project started as a single hardcoded scenario for one specific real
 corridor (detector ids like `det_sec1_galle_dir`, route ids like

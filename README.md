@@ -33,7 +33,7 @@ picker.
   platform too. This has only actually been run on Windows; it has not
   been tested on Linux or macOS.
 
-### Versions this release (v1.3.0) was built and tested against
+### Versions this release (v1.4.0) was built and tested against
 
 Recorded directly from the development machine, not aspirational:
 

@@ -98,3 +98,37 @@ test('a <vehicle> row missing its speed attribute is skipped, not guessed into a
     approxEqual(result.idle.CO, 0);
     approxEqual(result.moving.CO, 0);
 });
+
+test('fuel is split by fuel type (petrol/diesel), not just pooled — previously pooled-only here while the tripinfo parser already split it', () => {
+    const result = parseEmissionSplitXML(SAMPLE_EMISSION_OUTPUT);
+    // Idle: only vA (passenger_car, petrol) at t=0, 50mg fuel -> 0.00005kg / 0.745 density
+    approxEqual(result.idle.fuelLitersPetrol, 0.00005 / 0.745, 1e-8);
+    approxEqual(result.idle.fuelLitersDiesel, 0);
+    approxEqual(result.idle.fuelLiters, result.idle.fuelLitersPetrol + result.idle.fuelLitersDiesel, 1e-8);
+
+    // Moving: vB (heavy_bus, diesel) at both steps (200mg total) + vA at t=1 (50mg, petrol)
+    approxEqual(result.moving.fuelLitersDiesel, 0.0002 / 0.832, 1e-8);
+    approxEqual(result.moving.fuelLitersPetrol, 0.00005 / 0.745, 1e-8);
+    approxEqual(result.moving.fuelLiters, result.moving.fuelLitersPetrol + result.moving.fuelLitersDiesel, 1e-8);
+});
+
+test('mg->L conversion: a known fuel mass produces a hand-checkable litre output for both densities', () => {
+    // 1000000 mg = 1 kg exactly, over one 1-second step -> density-only check
+    const xmlPetrol = `<?xml version="1.0"?>
+<emission-export>
+    <timestep time="0.00"><vehicle id="v1" type="passenger_car" speed="5.0" CO="0" HC="0" PMx="0" NOx="0" CO2="0" fuel="1000000"/></timestep>
+    <timestep time="1.00"><vehicle id="v1" type="passenger_car" speed="5.0" CO="0" HC="0" PMx="0" NOx="0" CO2="0" fuel="0"/></timestep>
+</emission-export>`;
+    const rPetrol = parseEmissionSplitXML(xmlPetrol);
+    // 1 kg petrol / 0.745 kg/L = 1.342281879... L
+    approxEqual(rPetrol.moving.fuelLiters, 1 / 0.745, 1e-9);
+
+    const xmlDiesel = `<?xml version="1.0"?>
+<emission-export>
+    <timestep time="0.00"><vehicle id="v1" type="heavy_bus" speed="5.0" CO="0" HC="0" PMx="0" NOx="0" CO2="0" fuel="1000000"/></timestep>
+    <timestep time="1.00"><vehicle id="v1" type="heavy_bus" speed="5.0" CO="0" HC="0" PMx="0" NOx="0" CO2="0" fuel="0"/></timestep>
+</emission-export>`;
+    const rDiesel = parseEmissionSplitXML(xmlDiesel);
+    // 1 kg diesel / 0.832 kg/L = 1.201923... L
+    approxEqual(rDiesel.moving.fuelLiters, 1 / 0.832, 1e-9);
+});

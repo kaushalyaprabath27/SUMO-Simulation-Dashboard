@@ -17,6 +17,27 @@
 // parserWarnings rather than via a "some record must be missing" inference).
 
 // ---------------------------------------------------------------------
+// Fuel density constants (mg/L conversion), named and sourced rather than
+// left as inline magic numbers. SUMO reports fuel consumption in
+// milligrams (SUMO >= 1.14; see the manuscript's Section 5/CLAUDE.md);
+// dividing the mass by density gives volume. Values at 15 degC, consistent
+// across standard fuel-property references (e.g. the US DOE Alternative
+// Fuels Data Center's "Fuel Properties Comparison"): diesel ranges
+// roughly 0.82-0.86 kg/L, petrol/gasoline roughly 0.72-0.77 kg/L; these
+// specific figures (0.832/0.745) are the commonly quoted representative
+// values and are what this project has used throughout. Applied by
+// vehicle class: bus/truck/van are treated as diesel, everything else as
+// petrol -- a simplification (not every bus or van is diesel-fuelled, and
+// this project does not model fuel type per vType), not a per-vehicle
+// measurement.
+const FUEL_DENSITY_DIESEL_KG_PER_L = 0.832;
+const FUEL_DENSITY_PETROL_KG_PER_L = 0.745;
+
+function isDieselClass(vTypeLower) {
+    return vTypeLower.includes('bus') || vTypeLower.includes('truck') || vTypeLower.includes('van');
+}
+
+// ---------------------------------------------------------------------
 // Generic XML tokenizer/parser (dependency-free, no regex).
 // ---------------------------------------------------------------------
 
@@ -304,19 +325,19 @@ function parseEmissionsXML(xmlText, binDurSec, binCount) {
 
         let fuel_liters = 0;
         if (vType.toLowerCase().includes('bus')) {
-            fuel_liters = fuel_kg / 0.832;
+            fuel_liters = fuel_kg / FUEL_DENSITY_DIESEL_KG_PER_L;
             busFuel += fuel_liters;
             busTripCount += 1;
         } else if (vType.toLowerCase().includes('truck')) {
-            fuel_liters = fuel_kg / 0.832;
+            fuel_liters = fuel_kg / FUEL_DENSITY_DIESEL_KG_PER_L;
             otherFuelBreakdown.truck += fuel_liters;
             otherTripCountBreakdown.truck += 1;
         } else if (vType.toLowerCase().includes('van')) {
-            fuel_liters = fuel_kg / 0.832;
+            fuel_liters = fuel_kg / FUEL_DENSITY_DIESEL_KG_PER_L;
             otherFuelBreakdown.van += fuel_liters;
             otherTripCountBreakdown.van += 1;
         } else {
-            fuel_liters = fuel_kg / 0.745;
+            fuel_liters = fuel_kg / FUEL_DENSITY_PETROL_KG_PER_L;
             otherFuel += fuel_liters;
 
             if (vType.toLowerCase().includes('motorcycle')) {
@@ -409,7 +430,7 @@ function parseEmissionSplitXML(xmlText, idleThresholdMps) {
     const { root, parserWarnings } = parseXMLDocument(xmlText);
     const timestepNodes = collectByName(root, ['timestep'], []);
 
-    const zero = () => ({ CO: 0, CO2: 0, HC: 0, PMx: 0, NOx: 0, fuelLiters: 0 });
+    const zero = () => ({ CO: 0, CO2: 0, HC: 0, PMx: 0, NOx: 0, fuelLiters: 0, fuelLitersPetrol: 0, fuelLitersDiesel: 0 });
     const idle = zero();
     const moving = zero();
     let idleVehicleSteps = 0;
@@ -446,13 +467,21 @@ function parseEmissionSplitXML(xmlText, idleThresholdMps) {
             bucket.NOx += ((parseFloat(getAttrCI(v.attrs, 'NOx')) || 0) * stepLengthSec) / 1000; // mg -> g
 
             // Same density split used by parseEmissionsXML's fuel-cost logic
-            // (Section 4.3/CLAUDE.md): 0.832 kg/L for bus/truck/van, 0.745
-            // kg/L for everything else. vType comes from this row's own
-            // `type` attribute, not looked up elsewhere.
+            // (Section 4.3/CLAUDE.md, FUEL_DENSITY_* constants above).
+            // vType comes from this row's own `type` attribute, not looked
+            // up elsewhere. Split by fuel type (fuelLitersPetrol/Diesel), not
+            // just pooled (fuelLiters, kept for backward compatibility) --
+            // this used to be pooled-only here while parseEmissionsXML
+            // already split it, an inconsistency between the two parsers
+            // fixed alongside naming the density constants.
             const vType = (getAttrCI(v.attrs, 'type') || 'other').toLowerCase();
             const fuelKg = ((parseFloat(getAttrCI(v.attrs, 'fuel')) || 0) * stepLengthSec) / 1000000;
-            const density = (vType.includes('bus') || vType.includes('truck') || vType.includes('van')) ? 0.832 : 0.745;
-            bucket.fuelLiters += fuelKg / density;
+            const diesel = isDieselClass(vType);
+            const density = diesel ? FUEL_DENSITY_DIESEL_KG_PER_L : FUEL_DENSITY_PETROL_KG_PER_L;
+            const litersThisRow = fuelKg / density;
+            bucket.fuelLiters += litersThisRow;
+            if (diesel) bucket.fuelLitersDiesel += litersThisRow;
+            else bucket.fuelLitersPetrol += litersThisRow;
         });
     });
 

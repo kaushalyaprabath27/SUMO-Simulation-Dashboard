@@ -462,6 +462,11 @@
                                 <input type="number" min="1" id="validation-interval-minutes" placeholder="auto" title="Leave blank to use the data's own interval size, or set a larger value to combine several raw intervals into one row."
                                     style="width:70px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onValidationIntervalChange()">
                             </label>
+                            <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem;" title="TAG Unit M3.1's GEH thresholds (5/10) assume hourly flows. This is the assumed width of one raw data row, used to scale counts to an hourly-equivalent rate before computing GEH's status — only used as a fallback when the uploaded file has a single row and its own spacing can't be inferred.">
+                                Interval length for hourly scaling (min), fallback only:
+                                <input type="number" min="1" id="geh-interval-length-minutes" value="60"
+                                    style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onValidationIntervalChange()">
+                            </label>
                             <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem;">
                                 Show from:
                                 <input type="text" placeholder="00:00" id="validation-range-from" title="Only show interval rows starting at or after this clock time. Leave blank to show the full simulation."
@@ -812,6 +817,11 @@
                             style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
                         to
                         <input type="text" placeholder="24:00" id="mape-range-to" title="Only show interval rows ending at or before this clock time. Leave blank to show the full simulation."
+                            style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
+                    </label>
+                    <label style="font-size:0.85rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.4rem;" title="Acceptance band: an interval counts toward the Success Rate when its error is at or under this percentage. Default 15%, after the DMRB/TAG Unit M3.1 journey-time validation criterion (modelled journey times within 15% of surveyed times, or one minute if larger, for more than 85% of routes). This tool applies only the percentage part.">
+                        Acceptance band (%, DMRB/TAG M3.1):
+                        <input type="number" min="1" id="mape-acceptance-band" value="15"
                             style="width:60px; padding:0.3rem 0.4rem; border:1px solid #ccc; border-radius:4px;" onchange="App.onMapeIntervalChange()">
                     </label>
                 </div>

@@ -23,15 +23,22 @@ authors:
       Engineering, University of Ruhuna, Sri Lanka
 repository-code: 'https://github.com/kaushalyaprabath27/SUMO-Simulation-Dashboard'
 license: MIT
-version: 1.3.0
+version: 1.4.0
 # v1.0.0 (commit 9734e32) predates the regex-to-tokenizer emissions parser
 # rewrite. v1.1.0 added that rewrite. v1.2.0 added the idle/moving
 # emissions split (parseEmissionSplitXML). v1.3.0 fixed the built-in
 # vehicle-type emissionClass defaults (were HBEFA3 and, for three of
-# seven types, a generic non-motorcycle-specific class -- see CLAUDE.md's
-# History section) -- v1.3.0 is the release described and verified in the
-# paper.
-# TODO (author): fill in once the v1.3.0 tag is pushed and a Zenodo DOI is
+# seven types, a generic non-motorcycle-specific class). v1.4.0 is a
+# correctness-fix round: GEH hourly-equivalent scaling, renamed GEH status
+# labels, a TAG M3.1 rollup alongside the dashboard's own convention,
+# signed MPE and a user-editable MAPE acceptance band, a coefficient
+# display fix plus a linear-model alternative with adjusted R^2/AIC in the
+# sensitivity module, named/sourced fuel-density constants with the
+# idle/moving split now also fuel-type-split, an emissionClass-missing
+# import warning, a vendored-library provenance manifest with a checksum
+# test, and CI -- see CLAUDE.md's History section for the full account.
+# v1.4.0 is the release described and verified in the paper.
+# TODO (author): fill in once the v1.4.0 tag is pushed and a Zenodo DOI is
 # minted for it -- see TODO_FOR_AUTHOR.md. Do not fabricate a DOI here in
 # the meantime.
 # doi: 10.5281/zenodo.XXXXXXX

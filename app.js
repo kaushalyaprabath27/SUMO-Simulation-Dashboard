@@ -2065,7 +2065,7 @@ const App = {
         mape: {
             title: 'MAPE Validation — How to Use & Get the Best Results',
             body: `<h4 style="margin-top:0;">What MAPE measures</h4>
-<p>MAPE compares simulated travel time on a route/edge to real, measured travel time. <strong>≤10%</strong> = Valid (Excellent), <strong>≤15%</strong> = Marginal (Acceptable), <strong>&gt;15%</strong> = Invalid — the model doesn't reflect that edge yet.</p>
+<p>MAPE compares simulated travel time on a route/edge to real, measured travel time. <strong>≤10%</strong> = Valid (Excellent), <strong>≤ the acceptance band</strong> (default 15%, editable above — after the DMRB/TAG Unit M3.1 journey-time criterion) = Marginal (Acceptable), <strong>above the band</strong> = Invalid — the model doesn't reflect that edge yet. Signed % Error (MPE) shows whether the model is consistently over- or under-estimating, which the absolute % Error alone cannot.</p>
 <p>This tab accepts <strong>either</strong> of two file types, auto-detected from what you paste/upload:</p>
 <h4>Option A — your existing E1 detector output (same file as the Validation tab)</h4>
 <ol>
@@ -2271,6 +2271,7 @@ const App = {
             }
 
             // 1. vTypes
+            const missingEmissionClass = [];
             doc.querySelectorAll('vType').forEach(node => {
                 const id = node.getAttribute('id');
                 if (id && VEHICLE_TYPES[id]) {
@@ -2281,8 +2282,28 @@ const App = {
                             VEHICLE_TYPES[id][param] = isNaN(numVal) ? val : numVal;
                         }
                     });
+                    // Checked against the FILE being imported, not this
+                    // dashboard's own in-memory default -- the real risk is
+                    // that the underlying SUMO project (e.g. a route file
+                    // authored outside this dashboard) has no emissionClass
+                    // at all, so running it directly with plain SUMO (not
+                    // through this dashboard's own export) falls back to
+                    // SUMO's own fleet-composition default, which may not
+                    // match a South Asian fleet -- see CLAUDE.md's History
+                    // section and the JSALT manuscript's Section 5/6.1 for
+                    // a real case of exactly this going unnoticed for the
+                    // dashboard's own built-in defaults.
+                    if (!node.hasAttribute('emissionClass')) {
+                        missingEmissionClass.push(id);
+                    }
                 }
             });
+            if (missingEmissionClass.length) {
+                this.showToast(
+                    `${missingEmissionClass.length} vehicle type${missingEmissionClass.length === 1 ? '' : 's'} (${missingEmissionClass.join(', ')}) have no emissionClass set. SUMO will assign its own default emission class per vType, which may not match your fleet -- see SUMO's own emissions-model documentation (https://sumo.dlr.de/docs/Models/Emissions.html) and set an explicit emissionClass per vehicle type on the Vehicle Params tab.`,
+                    'error'
+                );
+            }
 
             const flows = doc.querySelectorAll('flow');
             if (flows.length === 0) {
@@ -3293,10 +3314,23 @@ const App = {
         const [sh, sm] = simStart.split(':').map(Number);
         const simStartSec = sh * 3600 + sm * 60;
 
+        // Fallback interval length, used only when the uploaded data has a
+        // single row and its native spacing can't be inferred from
+        // consecutive timestamps. Previously a silent, undocumented 600s
+        // (10-minute) assumption; now an explicit, user-visible input
+        // (default 60 minutes) so the assumption is never invisible. This
+        // does NOT double up with the aggregation input below: whichever of
+        // the two actually determines a row's width, that same width is
+        // what the hourly-equivalent scaling reads back out afterward, so
+        // there is exactly one source of truth for "how wide is this row."
+        const fallbackMinutes = parseFloat(document.getElementById('geh-interval-length-minutes')?.value);
+        const fallbackDur = (fallbackMinutes > 0 ? fallbackMinutes : 60) * 60;
+
         const nativeBegins = Array.from(new Set(rawData.map(r => r.begin))).sort((a, b) => a - b);
-        const nativeDur = nativeBegins.length > 1 ? (nativeBegins[1] - nativeBegins[0]) : 600;
+        const nativeDur = nativeBegins.length > 1 ? (nativeBegins[1] - nativeBegins[0]) : fallbackDur;
         const minutesInput = parseFloat(document.getElementById('validation-interval-minutes')?.value);
         const intervalDur = (minutesInput > 0) ? Math.max(nativeDur, minutesInput * 60) : nativeDur;
+        const intervalMinutes = intervalDur / 60;
 
         let grouped, begins;
         if (intervalDur > nativeDur) {
@@ -3331,12 +3365,22 @@ const App = {
                 const obs = (this.observedGEH[detId] && this.observedGEH[detId][i]) || 0;
 
                 // GEH/status formulas live in gehMape.js (unit-tested in
-                // tests/gehMape.test.js) — same values as before, just extracted.
-                const geh = calculateGEH(sim, obs);
-                const status = getGEHStatus(geh);
+                // tests/gehMape.test.js). TAG Unit M3.1's 5/10 thresholds
+                // assume hourly flows, so the STATUS (and every rollup built
+                // from it) is driven by the hourly-equivalent GEH, not the
+                // raw-interval one — see gehMape.js's scaleToHourly. Both
+                // values are kept on the row so the raw one is still visible.
+                const gehRaw = calculateGEH(sim, obs);
+                const simHourly = scaleToHourly(sim, intervalMinutes);
+                const obsHourly = scaleToHourly(obs, intervalMinutes);
+                const gehHourly = calculateGEH(simHourly, obsHourly);
+                const status = getGEHStatus(gehHourly);
 
                 const clockSec = (simStartSec + beginSec) % 86400;
-                rows.push({ index: i, clock: clockFor(beginSec), clockSec, observed: obs, simulated: sim, geh: geh.toFixed(2), status });
+                rows.push({
+                    index: i, clock: clockFor(beginSec), clockSec, observed: obs, simulated: sim,
+                    geh: gehRaw.toFixed(2), gehHourly: gehHourly.toFixed(2), status
+                });
             });
 
             let visibleRows = rows;
@@ -3348,11 +3392,11 @@ const App = {
                 });
             }
 
-            const validCount = visibleRows.filter(r => r.status === 'Valid (Excellent)').length;
+            const validCount = visibleRows.filter(r => r.status === 'Good fit').length;
             const successRate = visibleRows.length ? ((validCount / visibleRows.length) * 100).toFixed(2) + '%' : '—';
             const modelStatus = getGEHModelStatus(validCount, visibleRows.length);
 
-            tables[detId] = { label, rows: visibleRows, successRate, modelStatus };
+            tables[detId] = { label, rows: visibleRows, successRate, modelStatus, intervalMinutes, validCount, totalCount: visibleRows.length };
         });
 
         return tables;
@@ -3373,6 +3417,21 @@ const App = {
                 <h3 style="color:var(--accent-primary);margin:1rem 0">${runName} — GEH Validation Results (${ids.length} detector${ids.length === 1 ? '' : 's'})</h3>
                 <p style="color:var(--text-secondary);margin-bottom:1.5rem;font-style:italic">${description}</p>
             </div>`;
+
+        // TAG Unit M3.1's own rollup: % of detector-intervals GEH < 5,
+        // pooled across ALL detectors (not one at a time) — a different
+        // scope from each card's own "Success Rate" below, which is a
+        // per-detector, three-tier LOCAL convention, not the TAG criterion
+        // itself. Status here is driven by the hourly-equivalent GEH.
+        const tagValidCount = ids.reduce((sum, id) => sum + gehTables[id].validCount, 0);
+        const tagTotalCount = ids.reduce((sum, id) => sum + gehTables[id].totalCount, 0);
+        const tagStatus = getTagM3RollupStatus(tagValidCount, tagTotalCount);
+        const tagPct = tagTotalCount ? ((tagValidCount / tagTotalCount) * 100).toFixed(2) + '%' : '—';
+        const tagMeets = tagStatus.startsWith('Meets');
+        html += `<div style="background:${tagMeets ? '#ecfdf5' : '#fef2f2'};border:1px solid ${tagMeets ? '#a7f3d0' : '#fecaca'};color:${tagMeets ? '#065f46' : '#991b1b'};padding:0.75rem 1rem;border-radius:6px;margin-bottom:1rem;font-size:0.85rem;">
+            <strong>TAG Unit M3.1 rollup (all detectors pooled):</strong> ${tagValidCount} of ${tagTotalCount} detector-intervals have GEH &lt; 5 (${tagPct}) — ${tagStatus}.
+            Each card's own "Success Rate" below is this dashboard's own per-detector convention (three tiers at 85%/50%), not this criterion; both use the hourly-equivalent GEH.
+        </div>`;
 
         // If a "Show from/to" window is set and it wiped out every single row,
         // that's almost always a mismatch between the typed range and the
@@ -3413,25 +3472,28 @@ const App = {
                     <th>Time Interval</th>
                     <th>Observed</th>
                     <th>Simulated</th>
-                    <th>GEH</th>
+                    <th>GEH (raw interval)</th>
+                    <th>GEH (hourly equiv.)</th>
                     <th>Status</th>
                 </tr></thead><tbody>`;
 
             t.rows.forEach(row => {
-                const gehNum = parseFloat(row.geh);
-                const gehColor = gehNum < 5 ? '#22c55e' : gehNum < 10 ? '#f59e0b' : '#ef4444';
+                const gehHourlyNum = parseFloat(row.gehHourly);
+                const gehColor = gehHourlyNum < 5 ? '#22c55e' : gehHourlyNum < 10 ? '#f59e0b' : '#ef4444';
                 html += `<tr>
                     <td style="white-space:nowrap">${row.clock}</td>
                     <td style="text-align:center;"><input type="number" min="0" value="${row.observed}" onchange="App.updateObservedGEH('${detId}', ${row.index}, this.value)" style="width:56px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:3px;"></td>
                     <td style="text-align:center;font-weight:bold">${row.simulated}</td>
-                    <td style="text-align:center;font-weight:bold;color:${gehColor}">${row.geh}</td>
+                    <td style="text-align:center;color:var(--text-secondary);">${row.geh}</td>
+                    <td style="text-align:center;font-weight:bold;color:${gehColor}">${row.gehHourly}</td>
                     <td style="font-size:0.72rem;color:${gehColor}">${row.status}</td>
                 </tr>`;
             });
 
             html += `</tbody></table>`;
+            html += `<div style="padding:0.3rem 1rem 0;font-size:0.68rem;color:var(--text-secondary);">Status is driven by the hourly-equivalent GEH (this interval = ${t.intervalMinutes.toFixed(0)} min, scaled ×${(60 / t.intervalMinutes).toFixed(2)}), not the raw-interval one.</div>`;
             html += `<div style="padding:0.5rem 1rem;background:var(--bg-card);border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;font-size:0.78rem;">
-                <span style="color:var(--text-secondary);">Success Rate: <strong>${t.successRate}</strong></span>
+                <span style="color:var(--text-secondary);">Success Rate (local convention): <strong>${t.successRate}</strong></span>
                 <span style="color:${statusColor};font-weight:600;">${t.modelStatus}</span>
             </div>`;
             html += `</div>`;
@@ -3674,6 +3736,8 @@ const App = {
 
         html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem;margin-bottom:2rem">`;
 
+        const bandPct = parseFloat(document.getElementById('mape-acceptance-band')?.value) || 15;
+
         edgeIds.forEach(edgeId => {
             const label = this._mapeNames[edgeId] || edgeId;
             let validCount = 0;
@@ -3686,11 +3750,13 @@ const App = {
                 // tests/gehMape.test.js, kept distinct from the detector-pair
                 // path's — see that file's comment for why).
                 const errPct = calculateMapeError(sim, obs);
-                const status = getMapeStatusEdgeFormat(errPct);
+                const mpePct = calculateMpe(sim, obs);
+                const status = getMapeStatusEdgeFormat(errPct, bandPct);
                 if (status !== 'Invalid') validCount++;
-                return { index: i, clock: clockFor(beginSec), obs, sim, err: errPct.toFixed(2) + '%', status };
+                return { index: i, clock: clockFor(beginSec), obs, sim, err: errPct.toFixed(2) + '%', mpe: mpePct, status };
             });
             const successRate = ((validCount / begins.length) * 100).toFixed(2) + '%';
+            const meanPercentageError = rows.length ? (rows.reduce((s, r) => s + r.mpe, 0) / rows.length) : 0;
             const modelStatus = getMapeModelStatusEdgeFormat(validCount, begins.length);
             const statusColor = modelStatus === 'Success (Valid)' ? '#22c55e' : '#f59e0b';
 
@@ -3705,7 +3771,8 @@ const App = {
                     <th>Time Interval</th>
                     <th>Observed (s)</th>
                     <th>Simulated (s)</th>
-                    <th>% Error</th>
+                    <th>% Error (abs.)</th>
+                    <th>Signed % Error</th>
                     <th>Status</th>
                 </tr></thead><tbody>`;
 
@@ -3717,13 +3784,14 @@ const App = {
                     <td style="text-align:center;"><input type="number" min="0" value="${row.obs}" onchange="App.updateObservedMAPE('${edgeId}', ${row.index}, this.value)" style="width:56px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:3px;"></td>
                     <td style="text-align:center;font-weight:bold">${row.sim}</td>
                     <td style="text-align:center;font-weight:bold;color:${rc}">${row.err}</td>
+                    <td style="text-align:center;color:var(--text-secondary);">${row.mpe >= 0 ? '+' : ''}${row.mpe.toFixed(2)}%</td>
                     <td style="font-size:0.72rem;color:${rc}">${row.status}</td>
                 </tr>`;
             });
 
             html += `</tbody></table>`;
             html += `<div style="padding:0.5rem 1rem;background:var(--bg-card);border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;font-size:0.78rem;">
-                <span style="color:var(--text-secondary);">Success Rate: <strong>${successRate}</strong></span>
+                <span style="color:var(--text-secondary);">Success Rate (&le;${bandPct}% band): <strong>${successRate}</strong> &nbsp;|&nbsp; MPE: <strong>${meanPercentageError >= 0 ? '+' : ''}${meanPercentageError.toFixed(2)}%</strong></span>
                 <span style="color:${statusColor};font-weight:600;">${modelStatus}</span>
             </div>`;
             html += `</div>`;
@@ -3807,6 +3875,8 @@ const App = {
             return;
         }
 
+        const bandPct = parseFloat(document.getElementById('mape-acceptance-band')?.value) || 15;
+
         const cardHtml = (seg) => {
             const fromRecords = grouped[seg.fromDet] || [];
             const toRecords = grouped[seg.toDet] || [];
@@ -3823,9 +3893,10 @@ const App = {
                 const sim = computeMapeSimulatedTravelTime(hasBoth, seg.distance, avgSpeed);
                 const obs = (this.observedMAPE[seg.id] && this.observedMAPE[seg.id][i]) || 0;
                 const errPct = calculateMapeError(sim, obs);
-                const status = getMapeStatus(hasBoth, seg.distance, errPct);
+                const mpePct = calculateMpe(sim, obs);
+                const status = getMapeStatus(hasBoth, seg.distance, errPct, bandPct);
                 const clockSec = (simStartSec + beginSec) % 86400;
-                return { index: i, clock: clockFor(beginSec), clockSec, obs, sim, err: errPct.toFixed(2) + '%', status };
+                return { index: i, clock: clockFor(beginSec), clockSec, obs, sim, err: errPct.toFixed(2) + '%', mpe: mpePct, status };
             });
 
             let rows = allRows;
@@ -3838,7 +3909,9 @@ const App = {
             }
 
             const validCount = rows.filter(r => r.status !== 'Invalid' && r.status !== 'Needs distance' && r.status !== 'Needs both detectors').length;
+            const configuredRows = rows.filter(r => r.status !== 'Needs distance' && r.status !== 'Needs both detectors');
             const successRate = rows.length ? ((validCount / rows.length) * 100).toFixed(2) + '%' : '—';
+            const meanPercentageError = configuredRows.length ? (configuredRows.reduce((s, r) => s + r.mpe, 0) / configuredRows.length) : 0;
             const modelStatus = getMapeModelStatus(validCount, rows.length);
             const statusColor = modelStatus === 'Success (Valid)' ? '#22c55e' : modelStatus === 'No data in this window' ? '#ef4444' : '#f59e0b';
 
@@ -3852,7 +3925,8 @@ const App = {
                     <th>Time Interval</th>
                     <th>Observed (s)</th>
                     <th>Simulated (s)</th>
-                    <th>% Error</th>
+                    <th>% Error (abs.)</th>
+                    <th>Signed % Error</th>
                     <th>Status</th>
                 </tr></thead><tbody>`;
 
@@ -3871,13 +3945,14 @@ const App = {
                     <td style="text-align:center;"><input type="number" min="0" value="${row.obs}" onchange="App.updateObservedMAPE('${seg.id}', ${row.index}, this.value)" style="width:56px;text-align:center;padding:2px;border:1px solid #ccc;border-radius:3px;"></td>
                     <td style="text-align:center;font-weight:bold">${notConfigured ? '—' : row.sim}</td>
                     <td style="text-align:center;font-weight:bold;color:${rc}">${notConfigured ? '—' : row.err}</td>
+                    <td style="text-align:center;color:var(--text-secondary);">${notConfigured ? '—' : (row.mpe >= 0 ? '+' : '') + row.mpe.toFixed(2) + '%'}</td>
                     <td style="font-size:0.72rem;color:${rc}">${row.status}</td>
                 </tr>`;
             });
 
             card += `</tbody></table>`;
             card += `<div style="padding:0.5rem 1rem;background:var(--bg-card);border-top:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;font-size:0.78rem;">
-                <span style="color:var(--text-secondary);">Success Rate: <strong>${successRate}</strong></span>
+                <span style="color:var(--text-secondary);">Success Rate (&le;${bandPct}% band): <strong>${successRate}</strong> &nbsp;|&nbsp; MPE: <strong>${meanPercentageError >= 0 ? '+' : ''}${meanPercentageError.toFixed(2)}%</strong></span>
                 <span style="color:${statusColor};font-weight:600;">${modelStatus}</span>
             </div>`;
             card += `</div>`;
@@ -4369,6 +4444,14 @@ const App = {
         return calculatePolyReg(xData, yData);
     },
 
+    // Delegates to polyReg.js's compareModels() — fits linear AND quadratic
+    // and reports which AIC prefers, rather than only ever fitting the
+    // quadratic the coding agent chose unreviewed (see CLAUDE.md's History
+    // section and Section 6.2 of the JSALT manuscript).
+    compareRegressionModels(xData, yData) {
+        return compareModels(xData, yData);
+    },
+
     renderDwellCharts(data) {
         const keys   = [0, 10, 20, 45, 90];
         const labels = [
@@ -4423,21 +4506,30 @@ const App = {
         });
 
         // ---------- update formulas ----------
+        // Shows BOTH the linear and quadratic fits, with adjusted R^2, AIC,
+        // and n on each, and which AIC prefers — rather than only ever
+        // showing the quadratic the coding agent chose on its own (see
+        // CLAUDE.md's History section, polyReg.js's own header comment, and
+        // Section 6.2 of the JSALT manuscript). The quadratic's own
+        // low-confidence/negative-value warnings are unchanged from before.
+        const oneModelLine = (label, reg, color) => {
+            const stats = reg.lowConfidence
+                ? ''
+                : ` &nbsp;|&nbsp; adj. R² = ${reg.adjR2} &nbsp;|&nbsp; AIC = ${reg.aic} &nbsp;|&nbsp; n = ${reg.n}`;
+            const warn = reg.warning ? `<br><span style="font-size:0.82em;">⚠ ${reg.warning}</span>` : '';
+            return `<span style="color:${color};">${label}: ${reg.eq}${stats}</span>${warn}`;
+        };
         const updateFormula = (canvasId, xData, yData) => {
             const el = document.getElementById('formula-' + canvasId);
             if (!el) return;
-            const reg = this.calculatePolyReg(xData, yData);
-            if (reg.lowConfidence) {
-                el.innerHTML = '<i style="color:#b45309;">' + reg.eq + '</i>';
-            } else if (reg.impliesNegative) {
-                // Surfaced visibly rather than silently showing a curve
-                // that predicts an impossible negative value — same
-                // "don't hide a gap, flag it" pattern as the tripinfo
-                // parser's skippedRecords/parserWarnings.
-                el.innerHTML = '<i style="color:#b91c1c;">' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i><br><i style="color:#b91c1c;font-size:0.82em;">⚠ ' + reg.warning + '</i>';
-            } else {
-                el.innerHTML = '<i>' + reg.eq + ' &nbsp;&nbsp;|&nbsp;&nbsp; R² = ' + reg.r2 + '</i>';
-            }
+            const cmp = this.compareRegressionModels(xData, yData);
+            const linColor = cmp.preferred.startsWith('Linear') ? '#059669' : 'inherit';
+            const quadColor = cmp.preferred.startsWith('Quadratic') ? '#059669' : 'inherit';
+            const quadWarnColor = cmp.quadratic.impliesNegative ? '#b91c1c' : (cmp.quadratic.lowConfidence ? '#b45309' : quadColor);
+            let html = '<i>' + oneModelLine('Linear', cmp.linear, cmp.linear.lowConfidence ? '#b45309' : linColor) + '</i>';
+            html += '<br><i>' + oneModelLine('Quadratic', cmp.quadratic, quadWarnColor) + '</i>';
+            html += `<br><i style="font-size:0.8em;color:var(--text-secondary,#888);">Preferred by AIC: ${cmp.preferred}</i>`;
+            el.innerHTML = html;
         };
         updateFormula('chart-dwell-tipping',  keys, timeLossData);
         updateFormula('chart-dwell-timeloss', keys, timeLossData);

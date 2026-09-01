@@ -9,21 +9,62 @@ function calculateGEH(sim, obs) {
     return Math.sqrt(2 * Math.pow(sim - obs, 2) / (sim + obs));
 }
 
-// <5 Valid (Excellent), <10 Marginal (Acceptable), >=10 Invalid (Needs Calibration).
-function getGEHStatus(geh) {
-    if (geh < 5) return 'Valid (Excellent)';
-    if (geh < 10) return 'Marginal (Acceptable)';
-    return 'Invalid (Needs Calibration)';
+// TAG Unit M3.1's own GEH thresholds are defined for HOURLY flows. This
+// tool's raw counts are often shorter intervals (10-minute SUMO/survey
+// bins by default) — applying the 5/10 thresholds directly to a 10-minute
+// count is not the same check, because GEH scales roughly with sqrt(count):
+// a 10-minute count run through the formula unchanged reads systematically
+// LOWER (more optimistic) than the same relative deviation would at hourly
+// volumes, by very roughly sqrt(60/10) = sqrt(6) ~= 2.4x. Scaling a raw
+// count up to its hourly-equivalent rate (count * 60/intervalMinutes)
+// before computing GEH corrects for this. Found and fixed as part of the
+// JSALT manuscript's round-8 revision — see CLAUDE.md's History section.
+function scaleToHourly(count, intervalMinutes) {
+    if (!(intervalMinutes > 0)) return count;
+    return count * (60 / intervalMinutes);
 }
 
-// Per-detector rollup shown under each Validation card. >=85% valid rows ->
-// Success, >=50% -> Needs Calibration, else Failed. No visible rows at all
-// (e.g. the "Show from/to" window excluded everything) is its own case.
+// GEH < 5 "Good fit", 5-10 "Marginal - investigate", >=10 "Poor fit -
+// recalibrate". Renamed from the earlier "Valid (Excellent)" / "Marginal
+// (Acceptable)" / "Invalid (Needs Calibration)": calling a 5-10 reading
+// "Acceptable" directly contradicted the paper's own stated description of
+// that band as "needs a closer look" — the old wording sent two different
+// messages about the same number in the same sentence.
+function getGEHStatus(geh) {
+    if (geh < 5) return 'Good fit';
+    if (geh < 10) return 'Marginal - investigate';
+    return 'Poor fit - recalibrate';
+}
+
+// Per-detector rollup shown under each Validation card. This is this
+// dashboard's OWN three-tier convention (>=85% "Good fit" rows -> Success,
+// >=50% -> Needs Calibration, else Failed), not TAG M3.1's own criterion,
+// which is a plain pass/fail at 85% with no middle tier — see
+// getTagM3RollupStatus below for that one. Kept because it's more
+// informative for a single detector than a binary pass/fail, but must not
+// be presented as "the TAG criterion" — it only shares TAG's 85% cutoff at
+// the top end. No visible rows at all (e.g. the "Show from/to" window
+// excluded everything) is its own case.
 function getGEHModelStatus(validCount, totalCount) {
     if (!totalCount) return 'No data in this window';
     if (validCount >= Math.ceil(totalCount * 0.85)) return 'Success (Valid)';
     if (validCount >= Math.ceil(totalCount * 0.5)) return 'Needs Calibration';
     return 'Failed — Major Calibration Required';
+}
+
+// TAG Unit M3.1's actual acceptability criterion, applied literally: a
+// model is acceptable when GEH < 5 for more than 85% of cases. Binary, no
+// middle tier — unlike getGEHModelStatus above. Intended to be called with
+// validCount/totalCount POOLED ACROSS ALL DETECTORS (TAG's own criterion is
+// stated at the level of the model, not one detector), where
+// getGEHModelStatus above is normally called per single detector; the
+// caller decides which counts to pass in, this function only applies the
+// threshold.
+function getTagM3RollupStatus(validCount, totalCount) {
+    if (!totalCount) return 'No data';
+    return validCount >= Math.ceil(totalCount * 0.85)
+        ? 'Meets TAG M3.1 criterion (>85% of cases GEH < 5)'
+        : 'Does not meet TAG M3.1 criterion (>85% of cases GEH < 5)';
 }
 
 // A single detector only measures speed at one point, not travel time — MAPE
@@ -53,23 +94,42 @@ function calculateMapeError(sim, obs) {
     return obs > 0 ? Math.abs(sim - obs) / obs * 100 : 0;
 }
 
-// <=10% Valid (Excellent), <=15% Marginal (Acceptable), >15% Invalid.
-// Shared by both call sites (detector-pair segments and raw edge/meandata)
-// — the underlying threshold logic was always identical between the two;
-// only the detector-pair path has extra pre-configuration states layered
-// on top (see getMapeStatus below).
-function getMapeStatusEdgeFormat(errPct) {
-    return errPct <= 10 ? 'Valid (Excellent)' : errPct <= 15 ? 'Marginal (Acceptable)' : 'Invalid';
+// Signed mean percentage error — same formula as calculateMapeError but
+// without the Math.abs, so a systematic under- or over-estimate is visible
+// instead of being folded into an always-positive average. A MAPE of 10.74%
+// could be eight intervals scattered evenly above and below observed, or
+// eight intervals all 10.74% low; MAPE alone cannot distinguish these, MPE
+// can. Same zero-observed guard as calculateMapeError.
+function calculateMpe(sim, obs) {
+    return obs > 0 ? (sim - obs) / obs * 100 : 0;
+}
+
+// <=10% Valid (Excellent) (fixed, not user-editable — a tighter internal
+// distinction within the pass zone), <= acceptance band Marginal
+// (Acceptable), > band Invalid. `bandPct` is the user-editable acceptance
+// band that decides Invalid vs. not (UI default 15, after the DMRB/TAG
+// Unit M3.1 journey-time validation criterion: modelled journey times
+// within 15% of surveyed times, or one minute if that is larger, for more
+// than 85% of routes — this function implements only the percentage part;
+// the "or one minute" absolute floor is not yet applied, see CLAUDE.md).
+// "Success rate" elsewhere counts every non-Invalid row, i.e. everything
+// at or under this band — that is the number this function's second
+// argument actually controls. Omitting bandPct preserves the original
+// hardcoded 15% exactly.
+function getMapeStatusEdgeFormat(errPct, bandPct) {
+    const band = (bandPct > 0) ? bandPct : 15;
+    const excellent = Math.min(10, band); // never let "Excellent" reach above a band tighter than 10%
+    return errPct <= excellent ? 'Valid (Excellent)' : errPct <= band ? 'Marginal (Acceptable)' : 'Invalid';
 }
 
 // Detector-pair segments have two configuration states edge/meandata
 // doesn't (no second detector yet, no distance entered) — those are
 // checked first since they mean "not configured," not "failing
 // calibration." Once configured, uses the same thresholds as edge format.
-function getMapeStatus(hasBoth, distance, errPct) {
+function getMapeStatus(hasBoth, distance, errPct, bandPct) {
     if (!hasBoth) return 'Needs both detectors';
     if (distance <= 0) return 'Needs distance';
-    return getMapeStatusEdgeFormat(errPct);
+    return getMapeStatusEdgeFormat(errPct, bandPct);
 }
 
 // Per-segment rollup. Note this replicates the original's exact rounding
@@ -96,8 +156,8 @@ function getMapeModelStatusEdgeFormat(validCount, totalCount) {
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        calculateGEH, getGEHStatus, getGEHModelStatus,
-        computeMapeAvgSpeed, computeMapeSimulatedTravelTime, calculateMapeError,
+        calculateGEH, scaleToHourly, getGEHStatus, getGEHModelStatus, getTagM3RollupStatus,
+        computeMapeAvgSpeed, computeMapeSimulatedTravelTime, calculateMapeError, calculateMpe,
         getMapeStatus, getMapeModelStatus,
         getMapeStatusEdgeFormat, getMapeModelStatusEdgeFormat
     };
