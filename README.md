@@ -33,7 +33,7 @@ picker.
   platform too. This has only actually been run on Windows; it has not
   been tested on Linux or macOS.
 
-### Versions this release (v1.2.0) was built and tested against
+### Versions this release (v1.3.0) was built and tested against
 
 Recorded directly from the development machine, not aspirational:
 
@@ -164,9 +164,10 @@ npm test
 
 Runs the automated unit test suite (Node's built-in test runner, no extra
 dependency) against the project's extracted pure-logic modules —
-`emissionsParser.js` (including its own hand-rolled XML tokenizer and its
-malformed-file recovery behaviour), `graphDistance.js`,
-`intervalAggregation.js`, `gehMape.js`, and others. 113 tests across 9
+`emissionsParser.js` (including its own hand-rolled XML tokenizer, its
+malformed-file recovery behaviour, and the idle/moving emissions split),
+`graphDistance.js`, `intervalAggregation.js`, `gehMape.js`, `data.js`'s
+default vehicle-type emission classes, and others. 125 tests across 11
 files, all passing as of this release.
 
 ## Build a Windows installer

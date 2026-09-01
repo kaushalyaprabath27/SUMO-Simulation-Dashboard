@@ -33,7 +33,7 @@ const VEHICLE_TYPES = {
     speedDev: 0.15, lcStrategic: 2.0, lcCooperative: 0.5,
     lcOpposite: 1.5, lcSpeedGain: 2.0, lcAssertive: 1.5,
     lcPushy: 0.15, jmCrossingGap: 1.0, jmIgnoreFoeProb: 0.10,
-    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA3/PC_G_EU4', color: '#0000ff'
+    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA4/PC_petrol_Euro-3', color: '#0000ff'
   },
   motorcycle: {
     vClass: 'motorcycle', length: 2.2, width: 0.9, maxSpeed: 16.67,
@@ -42,7 +42,7 @@ const VEHICLE_TYPES = {
     speedDev: 0.20, lcStrategic: 2.0, lcCooperative: 0.2,
     lcOpposite: 3.5, lcAssertive: 2.5, lcPushy: 0.60,
     lcSpeedGain: 3.0, jmCrossingGap: 0.8, jmIgnoreFoeProb: 0.40,
-    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA3/LDV_G_EU4', color: '#ff0000'
+    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA4/MC_4S_le250cc_Euro-3', color: '#ff0000'
   },
   tuk_tuk: {
     vClass: 'custom1', length: 2.8, width: 1.3, maxSpeed: 11.11,
@@ -51,7 +51,10 @@ const VEHICLE_TYPES = {
     speedDev: 0.15, lcStrategic: 2.0, lcCooperative: 0.4,
     lcOpposite: 2.5, lcSpeedGain: 2.0, lcAssertive: 2.0,
     lcPushy: 0.40, jmCrossingGap: 0.8, jmIgnoreFoeProb: 0.35,
-    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA3/LDV_G_EU4', color: '#00ff00'
+    // HBEFA has no auto-rickshaw/three-wheeler category (a European-fleet
+    // model); the closest available class is small-displacement motorcycle,
+    // the same approximation an earlier build of this tool already used.
+    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA4/MC_4S_le250cc_Euro-3', color: '#00ff00'
   },
   van: {
     vClass: 'passenger', length: 5.0, width: 1.9, maxSpeed: 13.89,
@@ -60,7 +63,7 @@ const VEHICLE_TYPES = {
     speedDev: 0.10, lcStrategic: 2.0, lcCooperative: 0.6,
     lcOpposite: 1.0, lcSpeedGain: 1.5, lcAssertive: 1.5,
     lcPushy: 0.12, jmCrossingGap: 1.2, jmIgnoreFoeProb: 0.12,
-    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA3/LDV_G_EU4', color: '#ffa500'
+    jmIgnoreKeepClearTime: 0, emissionClass: 'HBEFA4/LCV_diesel_N1-II_Euro-3', color: '#ffa500'
   },
   heavy_bus: {
     vClass: 'bus', length: 10.0, width: 2.5, maxSpeed: 11.11,
@@ -69,7 +72,7 @@ const VEHICLE_TYPES = {
     speedDev: 0.08, lcStrategic: 2.0, lcCooperative: 0.8,
     lcSpeedGain: 1.0, lcOpposite: 1.0, lcAssertive: 1.0,
     lcPushy: 0.00, jmCrossingGap: 2.0, jmIgnoreFoeProb: 0.08,
-    jmIgnoreKeepClearTime: 1, emissionClass: 'HBEFA3/Bus', color: '#ffff00'
+    jmIgnoreKeepClearTime: 1, emissionClass: 'HBEFA4/UBus_Std_gt15-18t_Euro-III', color: '#ffff00'
   },
   truck: {
     vClass: 'truck', length: 7.5, width: 2.4, maxSpeed: 11.11,
@@ -78,7 +81,7 @@ const VEHICLE_TYPES = {
     speedDev: 0.08, lcStrategic: 2.0, lcCooperative: 0.8,
     lcSpeedGain: 1.0, lcOpposite: 1.0, lcAssertive: 1.0,
     lcPushy: 0.00, jmCrossingGap: 2.0, jmIgnoreFoeProb: 0.08,
-    jmIgnoreKeepClearTime: 1, emissionClass: 'HBEFA3/HDV', color: '#800080'
+    jmIgnoreKeepClearTime: 1, emissionClass: 'HBEFA4/RT_gt7_5-12t_Euro-III', color: '#800080'
   },
   fast_ped: {
     vClass: 'pedestrian', length: 0.5, width: null, maxSpeed: 1.4,
@@ -87,7 +90,7 @@ const VEHICLE_TYPES = {
     speedDev: null, lcStrategic: null, lcCooperative: null,
     lcOpposite: null, lcSpeedGain: null, lcAssertive: null,
     lcPushy: null, jmCrossingGap: null, jmIgnoreFoeProb: null,
-    jmIgnoreKeepClearTime: null, emissionClass: 'HBEFA3/zero', color: '#a52a2a'
+    jmIgnoreKeepClearTime: null, emissionClass: 'HBEFA4/zero', color: '#a52a2a'
   }
 };
 
@@ -147,4 +150,11 @@ const FLOW_VEHICLE_TYPES = ['motorcycle', 'tuk_tuk', 'passenger_car', 'heavy_bus
 // discovered directly from whatever detector_output.xml / travel_times_output.xml
 // the user uploads (see App._buildGEHTables and App._renderMapeFromRaw in app.js).
 // ---------------------------------------------------------------------------
+
+// module.exports-guarded, like emissionsParser.js and the other pure-data/
+// pure-logic modules, so tests/ can require() VEHICLE_TYPES directly under
+// Node rather than needing a DOM to load this via <script>.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { VEHICLE_TYPES, VEHICLE_TYPE_NAMES, FLOW_VEHICLE_TYPES };
+}
 
